@@ -24,7 +24,7 @@ import streamlit as st
 openweather_key = st.secrets["OPENWEATHER_API_KEY"]
 amadeus_key = st.secrets["AMADEUS_API_KEY"]
 amadeus_secret = st.secrets["AMADEUS_API_SECRET"]
-
+openai_key = st.secrets["OPENAI_API_KEY"]
 
 # -- Amadeus API Setup --
 client_id = os.getenv("AMADEUS_API_KEY")
