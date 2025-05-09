@@ -3,6 +3,8 @@ import os
 import re
 import json
 import asyncio
+await asyncio.sleep(1.5)  # Add delay between chained agent calls
+
 import random
 from datetime import datetime, timedelta
 import inspect
