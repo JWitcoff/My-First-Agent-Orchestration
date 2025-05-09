@@ -20,21 +20,16 @@ from pydantic import BaseModel, Field
 # ─── Custom or Project-Specific Imports ──────────────────────────
 from amadeus import Client, ResponseError
 
-import streamlit as st
+# -- Load API Keys from Streamlit Secrets --
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# -- For Streamlit -- 
+amadeus = Client(
+    client_id=st.secrets["AMADEUS_API_KEY"],
+    client_secret=st.secrets["AMADEUS_API_SECRET"]
+)
+
 openweather_key = st.secrets["OPENWEATHER_API_KEY"]
-amadeus_key = st.secrets["AMADEUS_API_KEY"]
-amadeus_secret = st.secrets["AMADEUS_API_SECRET"]
-openai_key = st.secrets["OPENAI_API_KEY"]
 
-# -- Amadeus API Setup --
-client_id = os.getenv("AMADEUS_API_KEY")
-client_secret = os.getenv("AMADEUS_API_SECRET")
-if not client_id or not client_secret:
-    raise ValueError("Missing Amadeus API credentials in environment variables.")
-
-amadeus = Client(client_id=client_id, client_secret=client_secret)
 
 # -- Helper: Extract JSON from Text --
 def extract_json_from_text(text):
@@ -1132,6 +1127,3 @@ async def main():
         else:
             print("\n⚠️ No hotel recommendation found.")
 
-# -- Run the main function --
-if __name__ == "__main__":
-    asyncio.run(main())
