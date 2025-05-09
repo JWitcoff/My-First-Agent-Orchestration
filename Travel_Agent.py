@@ -18,8 +18,13 @@ from pydantic import BaseModel, Field
 # ─── Custom or Project-Specific Imports ──────────────────────────
 from amadeus import Client, ResponseError
 
-# -- Load Environment Variables --
-load_dotenv()
+import streamlit as st
+
+# -- For Streamlit -- 
+openweather_key = st.secrets["OPENWEATHER_API_KEY"]
+amadeus_key = st.secrets["AMADEUS_API_KEY"]
+amadeus_secret = st.secrets["AMADEUS_API_SECRET"]
+
 
 # -- Amadeus API Setup --
 client_id = os.getenv("AMADEUS_API_KEY")
