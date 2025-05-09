@@ -3,7 +3,6 @@ import os
 import re
 import json
 import asyncio
-await asyncio.sleep(1.5)  # Add delay between chained agent calls
 
 import random
 from datetime import datetime, timedelta
@@ -19,6 +18,8 @@ from pydantic import BaseModel, Field
 
 # ─── Custom or Project-Specific Imports ──────────────────────────
 from amadeus import Client, ResponseError
+import streamlit as st
+
 
 # -- Load API Keys from Streamlit Secrets --
 openai.api_key = st.secrets["OPENAI_API_KEY"]
