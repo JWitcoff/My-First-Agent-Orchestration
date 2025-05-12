@@ -70,6 +70,8 @@ if submitted and user_query:
                 st.write(f"**Price:** ${flight.price:,.2f}")
                 st.write(f"**Direct Flight:** {'Yes' if flight.direct_flight else 'No'}")
                 st.write(f"**Reason:** {flight.recommendation_reason}")
+                if hasattr(flight, 'booking_url') and flight.booking_url:
+                    st.markdown(f"[🔗 Book this flight]({flight.booking_url})", unsafe_allow_html=True)
 
             if hotel:
                 st.subheader("🏨 Hotel Recommendation")
@@ -78,6 +80,8 @@ if submitted and user_query:
                 st.write(f"**Price/Night:** ${hotel.price_per_night:,.2f}")
                 st.write(f"**Amenities:** {', '.join(hotel.amenities)}")
                 st.write(f"**Reason:** {hotel.recommendation_reason}")
+                if hasattr(hotel, 'booking_url') and hotel.booking_url:
+                    st.markdown(f"[🔗 Book this hotel]({hotel.booking_url})", unsafe_allow_html=True)
 
             if not travel_plan:
                 st.error("⚠️ No travel plan could be created. Try refining your query.")
