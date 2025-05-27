@@ -3,7 +3,6 @@ import os
 import re
 import json
 import asyncio
-import random
 from datetime import datetime, timedelta
 import inspect
 
@@ -38,12 +37,10 @@ def extract_json_from_text(text):
     else:
         return None
 
-
 # -- Helper: Test Amadeus API Connection --
 def test_amadeus_connection():
     """Test the Amadeus API connection with a simple request"""
     try:
-        # Simple request to test authentication
         response = amadeus.reference_data.locations.get(
             keyword="Paris",
             subType="CITY"
@@ -53,17 +50,18 @@ def test_amadeus_connection():
         return True
     except ResponseError as e:
         print(f"❌ Amadeus API Error: {str(e)}")
-        # Print more detailed error information
         print(f"Error details: {e.response.body}")
         return False
     except Exception as e:
-        print(f"❌ Unexpected error: {str(e)}")
+        print(f"❌ Unexpected Amadeus error: {str(e)}")
         return False
 
-# Call the test function early
+
+# -- Run API Tests --
 print("\n=== Testing Amadeus API Connection ===")
 api_working = test_amadeus_connection()
 print("=======================================\n")
+
 
 # -- Helper: Convert City Name to IATA Code --
 CITY_CODE_CACHE = {
@@ -108,116 +106,136 @@ def parse_date_range_fuzzy(dates: list[str], duration_days: int = 5):
     Returns tuple of (departure_date, return_date)
     """
     today = datetime.today()
-    max_future_date = today + timedelta(days=365)  # Limit to 1 year in future
-    
+    max_future_date = today + timedelta(days=365)
+
+    def enforce_valid_date_range(dep: datetime.date, ret: datetime.date):
+        dep = max(dep, today.date())
+        ret = max(ret, dep)
+        dep = min(dep, max_future_date.date())
+        ret = min(ret, max_future_date.date())
+        return dep, ret
+
     # Handle empty input
     if not dates or len(dates) == 0:
-        default_dep = min((today + timedelta(days=30)).date(), max_future_date.date())
-        default_ret = min(default_dep + timedelta(days=duration_days), max_future_date.date())
-        return str(default_dep), str(default_ret)
-    
+        dep, ret = enforce_valid_date_range(today.date() + timedelta(days=30),
+                                            today.date() + timedelta(days=30 + duration_days))
+        return str(dep), str(ret)
+
     # Try to parse exact dates if there are two entries
     try:
         if len(dates) == 2:
-            # Try multiple date formats
             for fmt in ["%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%B %d, %Y", "%b %d, %Y"]:
                 try:
                     dep = datetime.strptime(dates[0], fmt).date()
                     ret = datetime.strptime(dates[1], fmt).date()
-                    # Ensure dates are within valid range
-                    dep = min(max(dep, today.date()), max_future_date.date())
-                    ret = min(max(ret, dep), max_future_date.date())
+                    dep, ret = enforce_valid_date_range(dep, ret)
                     return str(dep), str(ret)
                 except ValueError:
                     continue
     except Exception:
         pass
-    
-    # If we have at least one entry, try to interpret it
+
+    # Process single fuzzy term
     if len(dates) >= 1:
         term = dates[0].strip().lower()
-        term = re.sub(r"[^a-z\s0-9]", "", term)  # Keep letters, spaces, and numbers
-        
-        # Handle "today"
+        term = re.sub(r"[^a-z\s0-9]", "", term)
+
+        # ✅ FIXED: Handle "last week of [month]" patterns
+        if "last week of" in term:
+            month_lookup = {
+                "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+                "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+                "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
+                "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12
+            }
+            
+            for month_name, month_num in month_lookup.items():
+                if month_name in term:
+                    # Calculate last week of the month
+                    year = today.year if today.month <= month_num else today.year + 1
+                    
+                    # Find last day of month
+                    if month_num == 12:
+                        last_day = datetime(year + 1, 1, 1) - timedelta(days=1)
+                    else:
+                        last_day = datetime(year, month_num + 1, 1) - timedelta(days=1)
+                    
+                    # Find the Monday of the last week
+                    days_to_monday = (last_day.weekday() + 1) % 7
+                    last_monday = last_day - timedelta(days=days_to_monday + 6)  # Previous Monday
+                    
+                    dep_raw = last_monday.date()
+                    ret_raw = dep_raw + timedelta(days=duration_days)
+                    
+                    dep, ret = enforce_valid_date_range(dep_raw, ret_raw)
+                    return str(dep), str(ret)
+
+        # Handle other patterns (keeping existing logic)
         if "today" in term:
-            dep = today.date()
-            ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+            dep, ret = enforce_valid_date_range(today.date(), today.date() + timedelta(days=duration_days))
             return str(dep), str(ret)
-        
-        # Handle "tomorrow"
+
         if "tomorrow" in term:
-            dep = min((today + timedelta(days=1)).date(), max_future_date.date())
-            ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+            dep, ret = enforce_valid_date_range(today.date() + timedelta(days=1),
+                                                today.date() + timedelta(days=1 + duration_days))
             return str(dep), str(ret)
-        
-        # Handle relative dates
+
         if "next week" in term:
             next_monday = today + timedelta(days=(7 - today.weekday()))
-            dep = min(next_monday.date(), max_future_date.date())
-            ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+            dep, ret = enforce_valid_date_range(next_monday.date(), next_monday.date() + timedelta(days=duration_days))
             return str(dep), str(ret)
-            
+
         if "next month" in term:
-            # First day of next month
             if today.month == 12:
-                dep = min(datetime(today.year + 1, 1, 15).date(), max_future_date.date())
+                dep_raw = datetime(today.year + 1, 1, 15).date()
             else:
-                dep = min(datetime(today.year, today.month + 1, 15).date(), max_future_date.date())
-            ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+                dep_raw = datetime(today.year, today.month + 1, 15).date()
+            dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
             return str(dep), str(ret)
-        
-        # Month names
+
+        # Month detection (existing logic)
         month_lookup = {
-            "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3, 
-            "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7, 
-            "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, 
+            "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+            "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+            "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
             "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12
         }
-        
-        # Try to extract a month
+
         for word, month in month_lookup.items():
             if word in term:
-                # Determine which part of the month
-                base_day = 15  # Default to mid-month
+                base_day = 15
                 if "early" in term:
                     base_day = 5
                 elif "mid" in term:
                     base_day = 15
                 elif "late" in term or "end" in term:
                     base_day = 25
-                
-                # Determine year
+
                 year = today.year if today.month <= month else today.year + 1
-                if year > max_future_date.year:
-                    year = max_future_date.year
-                
-                # Create dates
-                dep = min(datetime(year, month, base_day).date(), max_future_date.date())
-                ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+                dep_raw = datetime(year, month, base_day).date()
+                dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
                 return str(dep), str(ret)
-        
-        # Seasons
+
+        # Seasonal patterns (existing logic)
         seasonal = {
             "winter": ("january", 15),
-            "spring": ("april", 15),
+            "spring": ("april", 15), 
             "summer": ("july", 15),
             "fall": ("october", 15),
             "autumn": ("october", 15)
         }
-        
+
         for season, (month_word, day) in seasonal.items():
             if season in term:
-                month = month_lookup.get(month_word)
+                month = month_lookup[month_word]
                 year = today.year if today.month <= month else today.year + 1
-                if year > max_future_date.year:
-                    year = max_future_date.year
-                dep = min(datetime(year, month, day).date(), max_future_date.date())
-                ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+                dep_raw = datetime(year, month, day).date()
+                dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
                 return str(dep), str(ret)
-    
-    # Default to near future if we couldn't parse anything
-    dep = min((today + timedelta(days=30)).date(), max_future_date.date())
-    ret = min(dep + timedelta(days=duration_days), max_future_date.date())
+
+    # Final fallback
+    dep, ret = enforce_valid_date_range(today.date() + timedelta(days=30),
+                                        today.date() + timedelta(days=30 + duration_days))
     return str(dep), str(ret)
 
 # ─── Models and Agent Classes (Schemas, Not Instances) ──────────────────────
@@ -454,43 +472,6 @@ def get_current_weather(city: Optional[str] = None) -> str:
         return f"Weather information is currently unavailable. Please check a weather service for current conditions in {city}."
     
 # -- Flight Finder --
-# First, add this mock data helper function
-def get_mock_flight_data(origin, destination, dep_date, ret_date):
-    """Return simulated flight data when the API fails"""
-    # Estimate flight prices based on distance
-    domestic_destinations = ["NYC", "LAX", "SFO", "LAS", "MIA", "CHI", "BOS", "DFW"]
-    short_haul = ["CUN", "YVR", "YYZ", "MEX", "HAV", "SJO"]
-    
-    origin_code = origin[:3].upper() if len(origin) > 3 else origin.upper()
-    dest_code = destination[:3].upper() if len(destination) > 3 else destination.upper()
-    
-    # Estimate price based on flight type
-    price = 350  # Default domestic price
-    if dest_code in domestic_destinations and origin_code in domestic_destinations:
-        price = 350
-    elif dest_code in short_haul or origin_code in short_haul:
-        price = 750
-    else:
-        price = 1200  # International long-haul
-    
-    # Add some random variation
-    import random
-    price = price + random.randint(-50, 150)
-    
-    # Mock airline selection
-    airlines = ["Delta", "United", "American", "JetBlue", "Southwest"]
-    airline = random.choice(airlines)
-    
-    return {
-        "origin": origin,
-        "destination": destination,
-        "departure_date": dep_date,
-        "return_date": ret_date,
-        "airline": airline,
-        "price": price,
-        "direct_flight": random.choice([True, False]),
-        "recommendation_reason": "NOTE: This is estimated flight data due to API unavailability."
-    }
 
 @function_tool
 def flight_finder(origin: str, destination: str, dates: list[str]) -> dict:
@@ -554,11 +535,10 @@ def flight_finder(origin: str, destination: str, dates: list[str]) -> dict:
         
         if not origin_code:
             print(f"Could not find city code for origin: {origin}")
-            return get_mock_flight_data(origin, destination, dep_date, ret_date)
-            
+
         if not destination_code:
             print(f"Could not find city code for destination: {destination}")
-            return get_mock_flight_data(origin, destination, dep_date, ret_date)
+         
             
         print(f"Using city codes: {origin_code} to {destination_code}")
         
@@ -575,7 +555,6 @@ def flight_finder(origin: str, destination: str, dates: list[str]) -> dict:
             flights = response.data
             if not flights:
                 print("No flights found from API")
-                return get_mock_flight_data(origin, destination, dep_date, ret_date)
                 
             # Process the first flight offer
             flight = flights[0]
@@ -583,13 +562,11 @@ def flight_finder(origin: str, destination: str, dates: list[str]) -> dict:
             
             if len(itineraries) < 1:
                 print("No itineraries in flight data")
-                return get_mock_flight_data(origin, destination, dep_date, ret_date)
             
             # Handle one-way trips vs round trips
             outbound_segments = itineraries[0].get("segments", [])
             if not outbound_segments:
                 print("No segments in itinerary")
-                return get_mock_flight_data(origin, destination, dep_date, ret_date)
                 
             outbound_seg = outbound_segments[0]
             departure_date = outbound_seg.get("departure", {}).get("at", dep_date)[:10]
@@ -623,203 +600,296 @@ def flight_finder(origin: str, destination: str, dates: list[str]) -> dict:
             }
             
         except ResponseError as e:
-            print(f"Amadeus API error: {str(e)}")
-            print(f"Response body: {e.response.body if hasattr(e, 'response') else 'No response body'}")
-            # Fall back to mock data
-            return get_mock_flight_data(origin, destination, dep_date, ret_date)
-            
+            print(f"❌ Amadeus API error during flight search: {e}")
+
     except Exception as e:
-        print(f"Unexpected error in flight_finder: {str(e)}")
-        # Fall back to mock data on any error
-        return get_mock_flight_data(origin, destination, dep_date, ret_date)
+        print(f"❌ Unexpected error during flight search: {e}")
+
 
 # -- Hotel Finder ───────────────────────────────────────────────────────
+# ✅ Hotel Finder with Currency Detection and Conversion
 
-# - Mock Data for Hotel Finder
-def get_mock_hotel_data(destination, checkin_date, checkout_date, budget):
-    """Return simulated hotel data when the API fails"""
-    # Calculate nights of stay
+# Currency conversion rates (approximate - you could use a real API for live rates)
+CURRENCY_TO_USD = {
+    "USD": 1.0,
+    "JPY": 0.0067,  # 1 JPY = ~0.0067 USD  
+    "EUR": 1.08,    # 1 EUR = ~1.08 USD
+    "GBP": 1.25,    # 1 GBP = ~1.25 USD
+    "CAD": 0.74,    # 1 CAD = ~0.74 USD
+    "AUD": 0.65,    # 1 AUD = ~0.65 USD
+    "CNY": 0.14,    # 1 CNY = ~0.14 USD
+    "KRW": 0.00075, # 1 KRW = ~0.00075 USD
+}
+
+def detect_and_convert_currency(price: float, destination: str, price_currency: str = None) -> tuple[float, str]:
+    """
+    Detect likely currency based on price and destination, then convert to USD
+    Returns: (usd_price, detected_currency)
+    """
+    
+    # If currency is explicitly provided in the response
+    if price_currency and price_currency in CURRENCY_TO_USD:
+        usd_price = price * CURRENCY_TO_USD[price_currency]
+        return usd_price, price_currency
+    
+    # Heuristic detection based on price range and destination
+    destination_lower = destination.lower()
+    
+    # Japan - prices typically in Yen (high numbers)
+    if any(city in destination_lower for city in ["tokyo", "osaka", "kyoto", "japan"]):
+        if price > 5000:  # Likely Yen
+            usd_price = price * CURRENCY_TO_USD["JPY"]
+            return usd_price, "JPY"
+    
+    # Europe - prices typically in Euros  
+    elif any(city in destination_lower for city in ["paris", "rome", "madrid", "berlin", "amsterdam"]):
+        if 50 < price < 2000:  # Reasonable Euro range
+            usd_price = price * CURRENCY_TO_USD["EUR"]
+            return usd_price, "EUR"
+    
+    # UK - prices typically in Pounds
+    elif any(city in destination_lower for city in ["london", "manchester", "edinburgh"]):
+        if 50 < price < 2000:  # Reasonable GBP range
+            usd_price = price * CURRENCY_TO_USD["GBP"] 
+            return usd_price, "GBP"
+    
+    # Korea - prices typically in Won (very high numbers)
+    elif any(city in destination_lower for city in ["seoul", "korea"]):
+        if price > 50000:  # Likely Won
+            usd_price = price * CURRENCY_TO_USD["KRW"]
+            return usd_price, "KRW"
+    
+    # China - prices typically in Yuan
+    elif any(city in destination_lower for city in ["beijing", "shanghai", "china"]):
+        if 200 < price < 5000:  # Reasonable Yuan range
+            usd_price = price * CURRENCY_TO_USD["CNY"]
+            return usd_price, "CNY"
+    
+    # If price seems reasonable for USD (50-1000 range), assume it's already USD
+    if 50 <= price <= 1000:
+        return price, "USD"
+    
+    # If price is very high, guess it might be Yen
+    elif price > 5000:
+        usd_price = price * CURRENCY_TO_USD["JPY"] 
+        return usd_price, "JPY (estimated)"
+    
+    # Default to USD if unsure
+    return price, "USD (assumed)"
+
+@function_tool  
+def hotel_finder_tool(destination: str, checkin_date: str, checkout_date: str, budget: float, preferences: str = "") -> dict:
+    """Enhanced hotel finder with better location filtering"""
     try:
+        # Calculate nights and budget per night
         checkin_dt = datetime.strptime(checkin_date, "%Y-%m-%d")
         checkout_dt = datetime.strptime(checkout_date, "%Y-%m-%d")
-        nights = (checkout_dt - checkin_dt).days
-    except:
-        nights = 3  # Default to 3 nights if date parsing fails
-    
-    # Estimate hotel prices based on destination type
-    luxury_destinations = ["PAR", "TYO", "NYC", "LON", "ROM", "SYD"]
-    mid_tier_destinations = ["SFO", "CHI", "MIA", "BOS", "SEA", "BER"]
-    
-    dest_code = destination[:3].upper() if len(destination) > 3 else destination.upper()
-    
-    # Estimate price based on destination tier
-    if dest_code in luxury_destinations:
-        price_per_night = 250
-    elif dest_code in mid_tier_destinations:
-        price_per_night = 180
-    else:
-        price_per_night = 120
-    
-    # Add some random variation
-    price_per_night = price_per_night + random.randint(-20, 40)
-    
-    # Generate a hotel name
-    hotel_prefixes = ["Grand", "Royal", "Plaza", "Majestic", "Luxury", "Embassy", "Comfort", "Downtown"]
-    hotel_suffixes = ["Hotel", "Inn", "Suites", "Resort", "Place", "Lodge", "Towers"]
-    hotel_name = f"{random.choice(hotel_prefixes)} {destination} {random.choice(hotel_suffixes)}"
-    
-    # Generate amenities
-    all_amenities = ["WiFi", "Pool", "Fitness Center", "Restaurant", "Bar", "Room Service", 
-                      "Business Center", "Spa", "Parking", "Airport Shuttle", "Concierge"]
-    num_amenities = random.randint(3, 7)
-    amenities = random.sample(all_amenities, num_amenities)
-    
-    return {
-        "name": hotel_name,
-        "destination": destination,
-        "checkin_date": checkin_date,
-        "checkout_date": checkout_date,
-        "price_per_night": price_per_night,
-        "amenities": amenities,
-        "recommendation_reason": "NOTE: This is estimated hotel data due to API unavailability."
-    }
+        nights = max((checkout_dt - checkin_dt).days, 1)
+        budget_per_night = budget / nights
 
-# -- Hotel Finder Logic --
-def actual_hotel_finder_logic(destination: str, checkin_date: str, checkout_date: str, budget: float, preferences: str = "") -> dict:
-    """Return a structured hotel recommendation with estimated cost and hotel details."""
-    if not destination:
-        return {
-            "name": "",
-            "destination": "",
-            "checkin_date": checkin_date,
-            "checkout_date": checkout_date,
-            "price_per_night": 0.0,
-            "amenities": [],
-            "recommendation_reason": "ERROR: No destination provided."
-        }
-
-    if checkin_date == checkout_date:
-        return {
-            "name": "",
-            "destination": destination,
-            "checkin_date": checkin_date,
-            "checkout_date": checkout_date,
-            "price_per_night": 0.0,
-            "amenities": [],
-            "recommendation_reason": "No hotel needed for a same-day trip."
-        }
-
-    try:
-        checkin_dt = datetime.strptime(checkin_date, "%Y-%m-%d")
-        checkout_dt = datetime.strptime(checkout_date, "%Y-%m-%d")
-        nights = (checkout_dt - checkin_dt).days
-        per_night_budget = budget / max(nights, 1)
-    except:
-        nights = 1
-        per_night_budget = budget
-
-    # Get coordinates via Amadeus reference search
-    try:
-        response = amadeus.reference_data.locations.get(
-            keyword=destination,
-            subType="CITY"
-        )
-        if not response.data:
-            print(f"No city data found for {destination}")
-            return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
-
-        geo = response.data[0]["geoCode"]
-        lat = geo["latitude"]
-        lon = geo["longitude"]
-
-    except Exception as e:
-        print(f"Error getting geoCode for {destination}: {e}")
-        return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
-
-    print(f"Searching hotels near {destination} ({lat}, {lon}) for dates {checkin_date} to {checkout_date}")
-
-    try:
+        # Get city code for hotels
         city_code = get_city_code(destination)
         if not city_code:
-            print(f"No city code found for {destination}")
-            return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
+            raise ValueError(f"Could not resolve destination '{destination}' to city code")
 
-        hotel_response = amadeus.shopping.hotel_offers_search.get(
-            cityCode=city_code,
-            checkInDate=checkin_date,
-            checkOutDate=checkout_date,
-            adults=1,
-            roomQuantity=1,
-            currency="USD",
-            radius=5,
-            radiusUnit="KM"
+        print(f"🏨 Searching hotels in {destination} (code: {city_code}) from {checkin_date} to {checkout_date}")
+        print(f"💰 Budget: ${budget_per_night:.2f} per night (USD)")
+        if preferences:
+            print(f"📍 Location preference: {preferences}")
+
+        # Get Hotel List by City
+        hotel_list_response = amadeus.reference_data.locations.hotels.by_city.get(
+            cityCode=city_code
         )
+        
+        hotels_list = hotel_list_response.data
+        if not hotels_list:
+            raise ValueError(f"No hotels found for city {city_code}")
 
-        hotels = hotel_response.data
+        print(f"✅ Found {len(hotels_list)} hotels in {destination}")
+        
+        # ✅ IMPROVED: Filter hotels by location preference if specified
+        if preferences.strip():
+            location_keywords = [word.strip().lower() for word in preferences.split() if len(word.strip()) > 2]
+            filtered_hotels = []
+            
+            for hotel in hotels_list:
+                hotel_name = hotel.get('name', '').lower()
+                hotel_location = hotel.get('address', {}).get('cityName', '').lower()
+                searchable_text = f"{hotel_name} {hotel_location}"
+                
+                # Check if any location keyword matches
+                location_match = any(keyword in searchable_text for keyword in location_keywords)
+                if location_match:
+                    filtered_hotels.append(hotel)
+            
+            if filtered_hotels:
+                print(f"🎯 Filtered to {len(filtered_hotels)} hotels matching location preference")
+                hotels_list = filtered_hotels[:15]  # Take top 15 matching hotels
+            else:
+                print(f"⚠️ No hotels found matching '{preferences}', using all hotels")
+                hotels_list = hotels_list[:20]  # Fallback to first 20
+        else:
+            hotels_list = hotels_list[:20]
+        
+        hotel_ids = [hotel['hotelId'] for hotel in hotels_list]
+        
+        if not hotel_ids:
+            raise ValueError("No hotel IDs found")
 
-        if not hotels:
-            print(f"No hotels found via Amadeus, falling back to mock data.")
-            return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
+        # Search Hotel Offers
+        successful_searches = 0
+        valid_hotels = []
+        preference_keywords = [p.strip().lower() for p in preferences.split(",") if p.strip()]
 
-        candidates = []
-        for hotel_data in hotels:
-            hotel_info = hotel_data.get("hotel", {})
-            offers = hotel_data.get("offers", [])
-            if not offers:
+        print(f"🔍 Checking {len(hotel_ids)} hotels for availability...")
+
+        for i, hotel_id in enumerate(hotel_ids):
+            try:
+                # Try to get offers for this hotel
+                offers_response = amadeus.shopping.hotel_offers_search.get(
+                    hotelIds=hotel_id,
+                    checkInDate=checkin_date,
+                    checkOutDate=checkout_date,
+                    adults=1,
+                    roomQuantity=1,
+                    currency="USD"
+                )
+                
+                hotel_offers = offers_response.data
+                if not hotel_offers:
+                    continue
+                
+                successful_searches += 1
+                
+                # Process hotel data
+                hotel_data = hotel_offers[0]
+                hotel_info = hotel_data.get("hotel", {})
+                name = hotel_info.get("name", "Unknown Hotel")
+                offers = hotel_data.get("offers", [])
+                
+                if not offers:
+                    continue
+                
+                # Get the cheapest offer
+                best_offer = min(offers, key=lambda x: float(x.get("price", {}).get("total", float('inf'))))
+                price_info = best_offer.get("price", {})
+                raw_price = float(price_info.get("total", 0))
+                response_currency = price_info.get("currency", None)
+                
+                # Currency detection and conversion
+                usd_price_total, detected_currency = detect_and_convert_currency(
+                    raw_price, destination, response_currency
+                )
+                usd_price_per_night = usd_price_total / nights
+                
+                print(f"  💱 {name}: {raw_price:.0f} {detected_currency} = ${usd_price_per_night:.2f} USD/night")
+                
+                # Skip if unreasonably expensive
+                if usd_price_per_night > budget_per_night * 5:
+                    print(f"    ❌ Too expensive after conversion")
+                    continue
+                
+                # Extract amenities and check preferences
+                amenities = hotel_info.get("amenities", [])
+                description = hotel_info.get("description", {}).get("text", "").lower()
+                searchable_text = f"{description} {name.lower()} {' '.join(amenities).lower()}"
+                
+                # Enhanced location scoring
+                location_score = 0
+                if preferences.strip():
+                    location_keywords = [word.strip().lower() for word in preferences.split() if len(word.strip()) > 2]
+                    for keyword in location_keywords:
+                        if keyword in name.lower():
+                            location_score += 50  # High score for name match
+                        elif keyword in searchable_text:
+                            location_score += 20  # Lower score for description match
+
+                hotel_result = {
+                    "name": name,
+                    "destination": destination,
+                    "checkin_date": checkin_date,
+                    "checkout_date": checkout_date,
+                    "price_per_night": round(usd_price_per_night, 2),
+                    "amenities": amenities if isinstance(amenities, list) else [],
+                    "recommendation_reason": f"Found via Amadeus API (converted from {detected_currency})",
+                    "budget_friendly": usd_price_per_night <= budget_per_night,
+                    "location_score": location_score,
+                    "original_price": f"{raw_price:.0f} {detected_currency}"
+                }
+                
+                valid_hotels.append(hotel_result)
+                budget_status = "within budget" if usd_price_per_night <= budget_per_night else "over budget"
+                location_status = f"(location score: {location_score})" if preferences else ""
+                print(f"    ✅ {budget_status} {location_status}")
+                
+            except ResponseError as e:
+                error_msg = str(e)
+                if "NO ROOMS AVAILABLE" in error_msg or "INVALID" in error_msg:
+                    pass  # Common errors, don't spam
+                else:
+                    print(f"  ❌ API error for {hotel_id}: {e}")
+                continue
+            except Exception as e:
+                print(f"  ❌ Error processing hotel {hotel_id}: {e}")
                 continue
 
-            offer = offers[0]
-            total_price = float(offer.get("price", {}).get("total", 0.0))
-            price_per_night = total_price / max(nights, 1)
+        print(f"✅ Successfully checked {successful_searches} hotels, found {len(valid_hotels)} with availability")
 
-            if price_per_night <= per_night_budget:
-                candidates.append((hotel_info, offer, price_per_night))
+        if not valid_hotels:
+            return {
+                "name": "",
+                "destination": destination,
+                "checkin_date": checkin_date,
+                "checkout_date": checkout_date,
+                "price_per_night": 0.0,
+                "amenities": [],
+                "recommendation_reason": f"No hotels available for {checkin_date} to {checkout_date}. Try different dates."
+            }
 
-        if not candidates:
-            print(f"No hotels under budget. Falling back to cheapest available.")
-            for hotel_data in hotels:
-                hotel_info = hotel_data.get("hotel", {})
-                offers = hotel_data.get("offers", [])
-                if offers:
-                    offer = offers[0]
-                    total_price = float(offer.get("price", {}).get("total", 0.0))
-                    price_per_night = total_price / max(nights, 1)
-                    candidates.append((hotel_info, offer, price_per_night))
+        # ✅ IMPROVED: Enhanced sorting with location preference
+        def hotel_score(hotel):
+            score = 0
+            # Location preference gets highest priority
+            score += hotel["location_score"]
+            # Budget friendly gets points
+            if hotel["budget_friendly"]:
+                score += 50
+                # Prefer cheaper hotels within budget
+                score += (budget_per_night - hotel["price_per_night"]) / budget_per_night * 20
+            return score
 
-        if not candidates:
-            return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
+        valid_hotels.sort(key=hotel_score, reverse=True)
+        best_hotel = valid_hotels[0]
 
-        hotel_info, offer, price = sorted(candidates, key=lambda x: x[2])[0]
+        # Update recommendation reason based on selection criteria
+        if best_hotel["location_score"] > 0 and best_hotel["budget_friendly"]:
+            best_hotel["recommendation_reason"] = f"Best match: within budget and close to {preferences}!"
+        elif best_hotel["location_score"] > 0:
+            best_hotel["recommendation_reason"] = f"Good location match near {preferences}"
+        elif best_hotel["budget_friendly"]:
+            best_hotel["recommendation_reason"] = "Good match: within budget"
+        else:
+            best_hotel["recommendation_reason"] = "Best available option found"
 
-        amenities = hotel_info.get("amenities", [])
-        if not amenities:
-            amenities = ["WiFi", "Fitness Center"]
+        print(f"🏆 SELECTED: {best_hotel['name']} at ${best_hotel['price_per_night']:.2f}/night USD")
+        
+        # Clean up the result
+        result = {k: v for k, v in best_hotel.items() if k not in ["budget_friendly", "location_score", "original_price"]}
+        return result
 
+    except Exception as e:
+        print(f"❌ Hotel search error: {e}")
         return {
-            "name": hotel_info.get("name", "Unknown Hotel"),
+            "name": "",
             "destination": destination,
             "checkin_date": checkin_date,
             "checkout_date": checkout_date,
-            "price_per_night": price,
-            "amenities": amenities,
-            "recommendation_reason": "Found a hotel matching your preferences and budget."
+            "price_per_night": 0.0,
+            "amenities": [],
+            "recommendation_reason": f"Hotel search failed: {str(e)}"
         }
-
-    except ResponseError as e:
-        print(f"Amadeus API error during hotel search: {e}")
-        return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
-
-    except Exception as e:
-        print(f"Unexpected error during hotel search: {e}")
-        return get_mock_hotel_data(destination, checkin_date, checkout_date, budget)
-
-# -- Tool-wrapped hotel finder --
-@function_tool
-def hotel_finder_tool(destination: str, checkin_date: str, checkout_date: str, budget: float, preferences: str = "") -> dict:
-    """Tool-wrapped hotel finder."""
-    return actual_hotel_finder_logic(destination, checkin_date, checkout_date, budget, preferences)
-
-
+    
 # -- Agent Instances (Objects) ───────────────────────────────────────────────────────
 
 # -- Hotel Agent Object --
@@ -1009,40 +1079,74 @@ class Runner:
     async def run(agent: Agent, input_text: str):
         outputs = []
         history = []
+        flight = None
 
         # Step 1: Run the initial agent
         primary_output = await agent.run(input_text, history)
         outputs.append(primary_output)
 
-        # Step 2: If agent has handoffs (i.e. other agents), run them too
+        # Step 2: Run handoff agents if any
         if agent.handoffs:
             for subagent in agent.handoffs:
-                if isinstance(primary_output, TravelPlan) and subagent.name == "Hotel Agent":
-                    # Build structured input for Hotel Agent
-                    dates = primary_output.dates
-
-                    # Try to parse fuzzy dates into real ISO format
-                    if dates and isinstance(dates[0], str) and not re.match(r"\d{4}-\d{2}-\d{2}", dates[0]):
-                        dep_date, ret_date = parse_date_range_fuzzy(dates, duration_days=primary_output.duration_days)
+                if isinstance(primary_output, TravelPlan) and subagent.name == "Flight Agent":
+                    # Handle Flight Agent
+                    sub_output = await subagent.run(input_text, history)
+                    if isinstance(sub_output, FlightRecommendation):
+                        flight = sub_output
+                        # ✅ UPDATE: Immediately update TravelPlan dates with flight dates
+                        primary_output.dates = [flight.departure_date, flight.return_date]
+                    outputs.append(sub_output)
+                    
+                elif isinstance(primary_output, TravelPlan) and subagent.name == "Hotel Agent":
+                    # ✅ FIXED: Use flight dates if available, otherwise parse from TravelPlan
+                    if flight:
+                        # Use the actual flight dates
+                        dep_date = flight.departure_date
+                        ret_date = flight.return_date
                     else:
-                        dep_date = dates[0]
-                        ret_date = dates[-1]
+                        # Fallback: parse dates from TravelPlan
+                        dates = primary_output.dates
+                        if dates and isinstance(dates[0], str) and not re.match(r"\d{4}-\d{2}-\d{2}", dates[0]):
+                            dep_date, ret_date = parse_date_range_fuzzy(dates, duration_days=primary_output.duration_days)
+                        else:
+                            dep_date = dates[0] if dates else None
+                            ret_date = dates[-1] if dates and len(dates) > 1 else dep_date
 
+                    # ✅ FIXED: Extract location preferences from input_text
+                    location_prefs = ""
+                    if isinstance(input_text, str):
+                        # Extract location preferences from original input
+                        import re
+                        location_patterns = [
+                            r"near\s+([^,\.]+)",
+                            r"close to\s+([^,\.]+)", 
+                            r"around\s+([^,\.]+)",
+                            r"in\s+([^,\.]+)\s+area",
+                            r"located\s+([^,\.]+)"
+                        ]
+                        for pattern in location_patterns:
+                            match = re.search(pattern, input_text.lower())
+                            if match:
+                                location_prefs = match.group(1).strip()
+                                break
+                    elif isinstance(input_text, dict) and 'locationPrefs' in input_text:
+                        location_prefs = input_text['locationPrefs']
+
+                    # Build hotel inputs with proper dates and preferences
                     hotel_inputs = {
                         "destination": primary_output.destination,
                         "checkin_date": dep_date,
                         "checkout_date": ret_date,
-                        "budget": primary_output.budget,
-                        "preferences": ""
+                        "budget": primary_output.budget * 0.4,  # Allocate 40% of budget to hotels
+                        "preferences": location_prefs  # ✅ FIXED: Pass location preferences
                     }
 
                     sub_output = await subagent.run(hotel_inputs, history)
+                    outputs.append(sub_output)
                 else:
                     sub_output = await subagent.run(input_text, history)
+                    outputs.append(sub_output)
 
-                outputs.append(sub_output)
-
-        # Step 3: Return all outputs
         return SimpleResult(outputs)
 
 class SimpleResult:
