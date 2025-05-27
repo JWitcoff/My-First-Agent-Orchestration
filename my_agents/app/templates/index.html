@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Travel Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.15);
+            max-width: 600px;
+            width: 100%;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .header {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: rgba(255,255,255,0.3);
+            margin-top: 20px;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: white;
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+
+        .form-container {
+            padding: 40px;
+        }
+
+        .step {
+            display: none;
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        .step.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .step-title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .input-group {
+            margin-bottom: 25px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #4a5568;
+            font-size: 1rem;
+        }
+
+        .input-field {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            background: #f7fafc;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .date-inputs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f7fafc;
+        }
+
+        .checkbox-item:hover {
+            border-color: #667eea;
+            background: white;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            margin-right: 10px;
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+
+        .checkbox-item.checked {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .radio-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .radio-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f7fafc;
+            text-align: center;
+        }
+
+        .radio-item:hover {
+            border-color: #667eea;
+            background: white;
+        }
+
+        .radio-item input[type="radio"] {
+            margin-right: 8px;
+            accent-color: #667eea;
+        }
+
+        .radio-item.selected {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+            font-weight: 600;
+        }
+
+        .buttons {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 40px;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 120px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .summary {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .summary h3 {
+            color: #2d3748;
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+        }
+
+        .summary-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding: 5px 0;
+        }
+
+        .summary-label {
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .summary-value {
+            color: #2d3748;
+            font-weight: 600;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #e2e8f0;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .results {
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 12px;
+        }
+
+        .result-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .result-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+
+        .tag {
+            display: inline-block;
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-right: 8px;
+            margin-bottom: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+            }
+            
+            .header {
+                padding: 20px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .form-container {
+                padding: 30px 20px;
+            }
+            
+            .date-inputs {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✈️ AI Travel Planner</h1>
+            <p>Let's plan your perfect trip together</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+
+        <div class="form-container">
+            <!-- Step 1: When -->
+            <div class="step active" id="step1">
+                <h2 class="step-title">When do you want to travel?</h2>
+                <div class="input-group">
+                    <label>Travel dates or time period</label>
+                    <input type="text" id="travelDates" class="input-field" 
+                           placeholder="e.g., 'late June', 'next month', 'winter 2025', or specific dates">
+                </div>
+                <div class="input-group">
+                    <label>How many days?</label>
+                    <input type="number" id="duration" class="input-field" 
+                           placeholder="5" min="1" max="30" value="5">
+                </div>
+                <div class="buttons">
+                    <div></div>
+                    <button class="btn btn-primary" onclick="nextStep()">Next</button>
+                </div>
+            </div>
+
+            <!-- Step 2: Where -->
+            <div class="step" id="step2">
+                <h2 class="step-title">Where are you traveling?</h2>
+                <div class="input-group">
+                    <label>From (Origin)</label>
+                    <input type="text" id="origin" class="input-field" 
+                           placeholder="Los Angeles" value="Los Angeles">
+                </div>
+                <div class="input-group">
+                    <label>To (Destination)</label>
+                    <input type="text" id="destination" class="input-field" 
+                           placeholder="Tokyo" required>
+                </div>
+                <div class="input-group">
+                    <label>What's your total budget?</label>
+                    <input type="number" id="budget" class="input-field" 
+                           placeholder="3000" min="100" step="100" value="3000">
+                </div>
+                <div class="buttons">
+                    <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                    <button class="btn btn-primary" onclick="nextStep()">Next</button>
+                </div>
+            </div>
+
+            <!-- Step 3: Flight Preferences -->
+            <div class="step" id="step3">
+                <h2 class="step-title">Flight preferences</h2>
+                <div class="input-group">
+                    <label>Flight type preference</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" name="flightType" value="direct" id="direct" checked>
+                            <label for="direct">Direct flights preferred</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" name="flightType" value="cheapest" id="cheapest">
+                            <label for="cheapest">Cheapest option</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" name="flightType" value="flexible" id="flexible">
+                            <label for="flexible">Flexible</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Preferred airlines (optional)</label>
+                    <input type="text" id="preferredAirlines" class="input-field" 
+                           placeholder="e.g., United, Delta, American">
+                </div>
+                <div class="buttons">
+                    <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                    <button class="btn btn-primary" onclick="nextStep()">Next</button>
+                </div>
+            </div>
+
+            <!-- Step 4: Hotel Preferences -->
+            <div class="step" id="step4">
+                <h2 class="step-title">Hotel preferences</h2>
+                <div class="input-group">
+                    <label>Hotel amenities you'd like</label>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="pool" value="pool">
+                            <label for="pool">Pool</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="gym" value="gym">
+                            <label for="gym">Fitness Center</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="spa" value="spa">
+                            <label for="spa">Spa</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="restaurant" value="restaurant">
+                            <label for="restaurant">Restaurant</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="wifi" value="wifi">
+                            <label for="wifi">Free WiFi</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="parking" value="parking">
+                            <label for="parking">Parking</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Location preferences</label>
+                    <input type="text" id="locationPrefs" class="input-field" 
+                           placeholder="e.g., near city center, near beach, walking distance to attractions">
+                </div>
+                <div class="input-group">
+                    <label>Special requests</label>
+                    <input type="text" id="specialRequests" class="input-field" 
+                           placeholder="e.g., quiet room, high floor, accessibility needs">
+                </div>
+                <div class="buttons">
+                    <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                    <button class="btn btn-primary" onclick="nextStep()">Review & Plan</button>
+                </div>
+            </div>
+
+            <!-- Step 5: Review -->
+            <div class="step" id="step5">
+                <h2 class="step-title">Review your trip details</h2>
+                <div class="summary" id="summaryContent">
+                    <!-- Summary will be populated by JavaScript -->
+                </div>
+                <div class="buttons">
+                    <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                    <button class="btn btn-primary" onclick="generatePlan()">Generate My Trip Plan</button>
+                </div>
+            </div>
+
+            <!-- Loading Step -->
+            <div class="step" id="loading">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <h3>Planning your perfect trip...</h3>
+                    <p>This may take a few moments while we find the best flights and hotels for you.</p>
+                </div>
+            </div>
+
+            <!-- Results Step -->
+            <div class="step" id="results">
+                <h2 class="step-title">Your Trip Plan</h2>
+                <div class="results" id="resultsContent">
+                    <!-- Results will be populated by JavaScript -->
+                </div>
+                <div class="buttons">
+                    <button class="btn btn-secondary" onclick="startOver()">Plan Another Trip</button>
+                    <button class="btn btn-primary" onclick="exportPlan()">Export Plan</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const totalSteps = 5;
+
+        // Update progress bar
+        function updateProgress() {
+            const progress = (currentStep / totalSteps) * 100;
+            document.getElementById('progressFill').style.width = progress + '%';
+        }
+
+        // Navigation functions
+        function nextStep() {
+            if (validateCurrentStep()) {
+                if (currentStep < totalSteps) {
+                    document.getElementById(`step${currentStep}`).classList.remove('active');
+                    currentStep++;
+                    
+                    if (currentStep === 5) {
+                        generateSummary();
+                    }
+                    
+                    document.getElementById(`step${currentStep}`).classList.add('active');
+                    updateProgress();
+                }
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 1) {
+                document.getElementById(`step${currentStep}`).classList.remove('active');
+                currentStep--;
+                document.getElementById(`step${currentStep}`).classList.add('active');
+                updateProgress();
+            }
+        }
+
+        // Validation
+        function validateCurrentStep() {
+            switch(currentStep) {
+                case 1:
+                    return document.getElementById('travelDates').value.trim() !== '';
+                case 2:
+                    return document.getElementById('destination').value.trim() !== '';
+                default:
+                    return true;
+            }
+        }
+
+        // Generate summary
+        function generateSummary() {
+            const dates = document.getElementById('travelDates').value;
+            const duration = document.getElementById('duration').value;
+            const origin = document.getElementById('origin').value;
+            const destination = document.getElementById('destination').value;
+            const budget = document.getElementById('budget').value;
+            
+            const flightType = document.querySelector('input[name="flightType"]:checked').value;
+            const preferredAirlines = document.getElementById('preferredAirlines').value;
+            
+            const selectedAmenities = Array.from(document.querySelectorAll('.checkbox-item input:checked'))
+                .map(cb => cb.value).join(', ');
+            const locationPrefs = document.getElementById('locationPrefs').value;
+            const specialRequests = document.getElementById('specialRequests').value;
+
+            const summaryHTML = `
+                <h3>Trip Summary</h3>
+                <div class="summary-item">
+                    <span class="summary-label">When:</span>
+                    <span class="summary-value">${dates} (${duration} days)</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">From:</span>
+                    <span class="summary-value">${origin}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">To:</span>
+                    <span class="summary-value">${destination}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Budget:</span>
+                    <span class="summary-value">$${budget}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Flight preference:</span>
+                    <span class="summary-value">${flightType.charAt(0).toUpperCase() + flightType.slice(1)}</span>
+                </div>
+                ${preferredAirlines ? `
+                <div class="summary-item">
+                    <span class="summary-label">Preferred airlines:</span>
+                    <span class="summary-value">${preferredAirlines}</span>
+                </div>
+                ` : ''}
+                ${selectedAmenities ? `
+                <div class="summary-item">
+                    <span class="summary-label">Hotel amenities:</span>
+                    <span class="summary-value">${selectedAmenities}</span>
+                </div>
+                ` : ''}
+                ${locationPrefs ? `
+                <div class="summary-item">
+                    <span class="summary-label">Location preference:</span>
+                    <span class="summary-value">${locationPrefs}</span>
+                </div>
+                ` : ''}
+                ${specialRequests ? `
+                <div class="summary-item">
+                    <span class="summary-label">Special requests:</span>
+                    <span class="summary-value">${specialRequests}</span>
+                </div>
+                ` : ''}
+            `;
+
+            document.getElementById('summaryContent').innerHTML = summaryHTML;
+        }
+
+        // Generate plan - CALLS YOUR REAL PYTHON BACKEND!
+        async function generatePlan() {
+            // Show loading
+            document.getElementById('step5').classList.remove('active');
+            document.getElementById('loading').classList.add('active');
+
+            // Collect all form data
+            const formData = {
+                dates: document.getElementById('travelDates').value,
+                duration: parseInt(document.getElementById('duration').value || 5),
+                origin: document.getElementById('origin').value || 'Los Angeles',
+                destination: document.getElementById('destination').value,
+                budget: parseFloat(document.getElementById('budget').value || 3000),
+                flightType: document.querySelector('input[name="flightType"]:checked')?.value || 'direct',
+                preferredAirlines: document.getElementById('preferredAirlines').value || '',
+                amenities: Array.from(document.querySelectorAll('.checkbox-item input:checked')).map(cb => cb.value),
+                locationPrefs: document.getElementById('locationPrefs').value || '',
+                specialRequests: document.getElementById('specialRequests').value || ''
+            };
+
+            try {
+                console.log('🚀 Sending request to Python backend:', formData);
+                
+                const response = await fetch('/api/plan-trip', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                console.log('📡 Response status:', response.status);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error (${response.status}): ${errorText}`);
+                }
+
+                const result = await response.json();
+                console.log('✅ Received response from Python backend:', result);
+                
+                if (result.success) {
+                    showRealResults(result);
+                } else {
+                    throw new Error(result.error || result.message || 'Unknown error occurred');
+                }
+                
+            } catch (error) {
+                console.error('❌ Error calling backend:', error);
+                showError(error.message);
+            }
+        }
+
+        // Show REAL results from your Python backend
+        function showRealResults(result) {
+            const { travel_plan, flight, hotel } = result;
+            
+            let resultsHTML = '';
+
+            // Flight results
+            if (flight) {
+                resultsHTML += `
+                    <div class="result-card">
+                        <div class="result-title">✈️ Flight Recommendation</div>
+                        <p><strong>${flight.airline}</strong> - ${flight.origin} to ${flight.destination}</p>
+                        <p>Departure: ${flight.departure_date} | Return: ${flight.return_date}</p>
+                        <p><strong>Price:</strong> ${flight.price}</p>
+                        ${flight.direct_flight ? '<div class="tag">Direct Flight</div>' : '<div class="tag">Connecting Flight</div>'}
+                        <p style="margin-top: 10px; color: #666;"><em>${flight.recommendation_reason}</em></p>
+                    </div>
+                `;
+            }
+
+            // Hotel results
+            if (hotel && hotel.name) {
+                resultsHTML += `
+                    <div class="result-card">
+                        <div class="result-title">🏨 Hotel Recommendation</div>
+                        <p><strong>${hotel.name}</strong></p>
+                        <p>Check-in: ${hotel.checkin_date} | Check-out: ${hotel.checkout_date}</p>
+                        <p><strong>Price:</strong> ${hotel.price_per_night}/night</p>
+                        ${hotel.amenities ? hotel.amenities.map(amenity => `<div class="tag">${amenity}</div>`).join('') : ''}
+                        <p style="margin-top: 10px; color: #666;"><em>${hotel.recommendation_reason}</em></p>
+                    </div>
+                `;
+            }
+
+            // Travel plan/activities
+            if (travel_plan) {
+                resultsHTML += `
+                    <div class="result-card">
+                        <div class="result-title">🎯 Your Trip Plan</div>
+                        <p><strong>Destination:</strong> ${travel_plan.destination}</p>
+                        <p><strong>Duration:</strong> ${travel_plan.duration_days} days</p>
+                        <p><strong>Budget:</strong> ${travel_plan.budget}</p>
+                        ${travel_plan.activities ? `
+                            <p><strong>Suggested Activities:</strong></p>
+                            <ul style="margin-left: 20px;">
+                                ${travel_plan.activities.map(activity => `<li>${activity}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                        ${travel_plan.notes ? `<p style="margin-top: 10px; color: #666;"><em>Note: ${travel_plan.notes}</em></p>` : ''}
+                    </div>
+                `;
+            }
+
+            // Budget breakdown (if we have flight and hotel data)
+            if (flight && hotel && travel_plan) {
+                const flightCost = flight.price || 0;
+                const hotelCost = (hotel.price_per_night || 0) * (travel_plan.duration_days || 1);
+                const remaining = travel_plan.budget - flightCost - hotelCost;
+                
+                resultsHTML += `
+                    <div class="result-card">
+                        <div class="result-title">💰 Budget Breakdown</div>
+                        <p>Flight: ${flightCost}</p>
+                        <p>Hotel: ${hotelCost} (${travel_plan.duration_days} nights)</p>
+                        <p>Remaining for activities/food: ${remaining > 0 ? remaining : 0}</p>
+                        <p><strong>Total Budget:</strong> ${travel_plan.budget}</p>
+                        ${remaining > 0 ? '<div class="tag">Within Budget</div>' : '<div class="tag">Budget Tight</div>'}
+                    </div>
+                `;
+            }
+
+            document.getElementById('resultsContent').innerHTML = resultsHTML;
+            document.getElementById('loading').classList.remove('active');
+            document.getElementById('results').classList.add('active');
+        }
+
+        // Show error message
+        function showError(errorMessage) {
+            const errorHTML = `
+                <div class="result-card" style="border-left: 4px solid #e53e3e;">
+                    <div class="result-title">❌ Error</div>
+                    <p>Sorry, there was an error planning your trip:</p>
+                    <p style="color: #e53e3e; font-weight: 600;">${errorMessage}</p>
+                    <p>Please try again or contact support if the problem persists.</p>
+                </div>
+            `;
+            
+            document.getElementById('resultsContent').innerHTML = errorHTML;
+            document.getElementById('loading').classList.remove('active');
+            document.getElementById('results').classList.add('active');
+        }
+
+        // Utility functions
+        function startOver() {
+            currentStep = 1;
+            document.querySelectorAll('.step').forEach(step => step.classList.remove('active'));
+            document.getElementById('step1').classList.add('active');
+            updateProgress();
+            
+            // Clear form
+            document.querySelectorAll('input').forEach(input => {
+                if (input.type === 'checkbox' || input.type === 'radio') {
+                    input.checked = false;
+                } else if (input.id !== 'origin' && input.id !== 'duration' && input.id !== 'budget') {
+                    input.value = '';
+                }
+            });
+            
+            // Reset defaults
+            document.getElementById('direct').checked = true;
+        }
+
+        function exportPlan() {
+            alert('Export functionality would generate a PDF or email summary of your trip plan.');
+        }
+
+        // Event listeners for interactive elements
+        document.addEventListener('DOMContentLoaded', function() {
+            // Radio button styling
+            document.querySelectorAll('input[type="radio"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    document.querySelectorAll('.radio-item').forEach(item => {
+                        item.classList.remove('selected');
+                    });
+                    this.closest('.radio-item').classList.add('selected');
+                });
+            });
+
+            // Checkbox styling
+            document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    if (this.checked) {
+                        this.closest('.checkbox-item').classList.add('checked');
+                    } else {
+                        this.closest('.checkbox-item').classList.remove('checked');
+                    }
+                });
+            });
+
+            // Initialize progress
+            updateProgress();
+            
+            // Set default radio selection styling
+            document.getElementById('direct').closest('.radio-item').classList.add('selected');
+        });
+
+        // Enter key navigation
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && currentStep < 5) {
+                nextStep();
+            }
+        });
+    </script>
+</body>
+</html>
