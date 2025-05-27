@@ -140,6 +140,22 @@ def parse_date_range_fuzzy(dates: list[str], duration_days: int = 5):
         term = dates[0].strip().lower()
         term = re.sub(r"[^a-z\s0-9]", "", term)
 
+     # ✅ NEW: Handle day trips and same-day travel
+        if any(phrase in term for phrase in ["for the day", "day trip", "same day", "one day"]):
+            dep, ret = enforce_valid_date_range(today.date(), today.date())
+            return str(dep), str(ret)
+
+        # ✅ NEW: Handle "today" more specifically
+        if "today" in term:
+            if "for the day" in term or "day trip" in term:
+                # Same day trip
+                dep, ret = enforce_valid_date_range(today.date(), today.date())
+                return str(dep), str(ret)
+            else:
+                # Multi-day trip starting today
+                dep, ret = enforce_valid_date_range(today.date(), today.date() + timedelta(days=duration_days))
+                return str(dep), str(ret)
+
         # ✅ FIXED: Handle "last week of [month]" patterns
         if "last week of" in term:
             month_lookup = {
@@ -680,6 +696,18 @@ def detect_and_convert_currency(price: float, destination: str, price_currency: 
 @function_tool  
 def hotel_finder_tool(destination: str, checkin_date: str, checkout_date: str, budget: float, preferences: str = "") -> dict:
     """Enhanced hotel finder with better location filtering"""
+
+ # ✅ NEW: Handle same-day trips (no hotel needed)
+    if checkin_date == checkout_date:
+        return {
+            "name": "",
+            "destination": destination,
+            "checkin_date": checkin_date,
+            "checkout_date": checkout_date,
+            "price_per_night": 0.0,
+            "amenities": [],
+            "recommendation_reason": "No hotel needed for same-day trip."
+        }
     try:
         # Calculate nights and budget per night
         checkin_dt = datetime.strptime(checkin_date, "%Y-%m-%d")
@@ -1021,10 +1049,12 @@ If any required field is missing, make a reasonable assumption and mention this 
    - Use provided or estimated departure_date and return_date.
 
 4. CALL HOTEL AGENT:
-   - If it's not a day trip, call hotel_agent using flight dates.
-   - Pass adjusted hotel budget after accounting for flight cost.
-   - Include special requests (e.g., "hotel with pool").
-   - If hotel search fails, still proceed with best estimates.
+   - FIRST check if this is a day trip (same checkin/checkout dates)
+   - If day trip: Skip hotel search and return empty hotel recommendation
+   - If multi-day trip: Call hotel_agent using flight dates
+   - Pass adjusted hotel budget after accounting for flight cost
+   - Include special requests (e.g., "hotel with pool")
+   - If hotel search fails, still proceed with best estimates
 
 5. BUILD FINAL TRAVEL PLAN:
 Return a JSON object with EXACTLY these fields:
@@ -1112,11 +1142,36 @@ class Runner:
                             dep_date = dates[0] if dates else None
                             ret_date = dates[-1] if dates and len(dates) > 1 else dep_date
 
+                    # ✅ NEW: Skip hotel search for day trips
+                    if dep_date == ret_date:
+                        print(f"🚫 Skipping hotel search - same-day trip detected ({dep_date})")
+                        day_trip_hotel = {
+                            "name": "",
+                            "destination": primary_output.destination,
+                            "checkin_date": dep_date,
+                            "checkout_date": ret_date,
+                            "price_per_night": 0.0,
+                            "amenities": [],
+                            "recommendation_reason": "No hotel needed for same-day trip."
+                        }
+                        from pydantic import BaseModel
+                        class HotelRecommendation(BaseModel):
+                            name: str
+                            destination: str
+                            checkin_date: str
+                            checkout_date: str
+                            price_per_night: float
+                            amenities: list[str]
+                            recommendation_reason: str
+                        
+                        sub_output = HotelRecommendation(**day_trip_hotel)
+                        outputs.append(sub_output)
+                        continue
+
                     # ✅ FIXED: Extract location preferences from input_text
                     location_prefs = ""
                     if isinstance(input_text, str):
                         # Extract location preferences from original input
-                        import re
                         location_patterns = [
                             r"near\s+([^,\.]+)",
                             r"close to\s+([^,\.]+)", 
@@ -1142,9 +1197,6 @@ class Runner:
                     }
 
                     sub_output = await subagent.run(hotel_inputs, history)
-                    outputs.append(sub_output)
-                else:
-                    sub_output = await subagent.run(input_text, history)
                     outputs.append(sub_output)
 
         return SimpleResult(outputs)
