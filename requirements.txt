@@ -1,0 +1,8 @@
+amadeus
+asyncio
+flask
+flask-cors
+openai
+pydantic
+python-dotenv
+requests
