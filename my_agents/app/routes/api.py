@@ -3,15 +3,6 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import asyncio
 import json
-import sys
-
-try:
-    from app.agents.travel_agent import Runner, travel_agent, FlightRecommendation, HotelRecommendation, TravelPlan
-    print("✅ Successfully imported Travel_Agent modules")
-except ImportError as e:
-    print(f"❌ Error importing Travel_Agent: {e}")
-    print("Make sure Travel_Agent.py is in the same directory as this flask_server.py file")
-    sys.exit(1)
 
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'templates'))
 app = Flask(__name__, template_folder=template_dir)
@@ -26,6 +17,8 @@ def index():
 def plan_trip():
     """Main endpoint that processes travel requests"""
     try:
+        from app.agents.travel_agent import Runner, travel_agent  # ⬅️ Delayed import to avoid circular import
+
         data = request.json
         print(f"📥 Received request: {json.dumps(data, indent=2)}")
         
@@ -123,12 +116,12 @@ def build_query_from_form_data(data):
 
 def extract_agent_results(result):
     """Extract and format results from your travel agent"""
+    from app.agents.travel_agent import FlightRecommendation, HotelRecommendation, TravelPlan  # ⬅️ Delayed import here too
     
     flight_data = None
     hotel_data = None
     travel_plan_data = None
     
-    # Extract different types of results
     for output in result.outputs:
         if isinstance(output, FlightRecommendation):
             flight_data = {
@@ -194,7 +187,6 @@ if __name__ == '__main__':
     print("=" * 50)
     print("💡 Serving your frontend from templates/index.html via Flask's render_template()")
     print("=" * 50)
-
     
     # Start the Flask server on port 8000
     print("📣 Flask is starting — auto-reloader is", "ON" if app.debug else "OFF")
