@@ -1,173 +1,18 @@
-import os
-import re
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
-from amadeus import Client, ResponseError
-from dotenv import load_dotenv
+from amadeus import ResponseError
+from app.config             import AMA_CLIENT as amadeus
+from app.agents.utils.dates import parse_date_range_fuzzy
+from app.agents.utils.iata  import get_city_code
 
-# Load environment variables
-load_dotenv()
-amadeus = Client(
-    client_id=os.getenv("AMADEUS_API_KEY"),
-    client_secret=os.getenv("AMADEUS_API_SECRET")
-)
-
-# ✅ ADD: Fuzzy date parsing function from working version
-def parse_date_range_fuzzy(dates: list[str], duration_days: int = 5):
-    """
-    Parse dates from various formats including specific dates, relative terms, months, and seasons.
-    Returns tuple of (departure_date, return_date)
-    """
-    today = datetime.today()
-    max_future_date = today + timedelta(days=365)
-
-    def enforce_valid_date_range(dep: datetime.date, ret: datetime.date):
-        dep = max(dep, today.date())
-        ret = max(ret, dep)
-        dep = min(dep, max_future_date.date())
-        ret = min(ret, max_future_date.date())
-        return dep, ret
-
-    # Handle empty input
-    if not dates or len(dates) == 0:
-        dep, ret = enforce_valid_date_range(today.date() + timedelta(days=30),
-                                            today.date() + timedelta(days=30 + duration_days))
-        return str(dep), str(ret)
-
-    # Try to parse exact dates if there are two entries
-    try:
-        if len(dates) == 2:
-            for fmt in ["%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%B %d, %Y", "%b %d, %Y"]:
-                try:
-                    dep = datetime.strptime(dates[0], fmt).date()
-                    ret = datetime.strptime(dates[1], fmt).date()
-                    dep, ret = enforce_valid_date_range(dep, ret)
-                    return str(dep), str(ret)
-                except ValueError:
-                    continue
-    except Exception:
-        pass
-
-    # Process single fuzzy term
-    if len(dates) >= 1:
-        term = dates[0].strip().lower()
-        term = re.sub(r"[^a-z\s0-9]", "", term)
-
-        # Handle other patterns
-        if "today" in term:
-            dep, ret = enforce_valid_date_range(today.date(), today.date() + timedelta(days=duration_days))
-            return str(dep), str(ret)
-
-        if "tomorrow" in term:
-            dep, ret = enforce_valid_date_range(today.date() + timedelta(days=1),
-                                                today.date() + timedelta(days=1 + duration_days))
-            return str(dep), str(ret)
-
-        if "next week" in term:
-            next_monday = today + timedelta(days=(7 - today.weekday()))
-            dep, ret = enforce_valid_date_range(next_monday.date(), next_monday.date() + timedelta(days=duration_days))
-            return str(dep), str(ret)
-
-        if "next month" in term:
-            if today.month == 12:
-                dep_raw = datetime(today.year + 1, 1, 15).date()
-            else:
-                dep_raw = datetime(today.year, today.month + 1, 15).date()
-            dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
-            return str(dep), str(ret)
-
-        # Month detection
-        month_lookup = {
-            "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
-            "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
-            "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
-            "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12
-        }
-
-        for word, month in month_lookup.items():
-            if word in term:
-                base_day = 15
-                if "early" in term:
-                    base_day = 5
-                elif "mid" in term:
-                    base_day = 15
-                elif "late" in term or "end" in term:
-                    base_day = 25
-
-                year = today.year if today.month <= month else today.year + 1
-                dep_raw = datetime(year, month, base_day).date()
-                dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
-                return str(dep), str(ret)
-
-        # Seasonal patterns
-        seasonal = {
-            "winter": ("january", 15),
-            "spring": ("april", 15), 
-            "summer": ("july", 15),
-            "fall": ("october", 15),
-            "autumn": ("october", 15)
-        }
-
-        for season, (month_word, day) in seasonal.items():
-            if season in term:
-                month = month_lookup[month_word]
-                year = today.year if today.month <= month else today.year + 1
-                dep_raw = datetime(year, month, day).date()
-                dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
-                return str(dep), str(ret)
-
-    # Final fallback
-    dep, ret = enforce_valid_date_range(today.date() + timedelta(days=30),
-                                        today.date() + timedelta(days=30 + duration_days))
-    return str(dep), str(ret)
-
-# ✅ ADD: City code resolution
-CITY_CODE_CACHE = {
-    "tokyo": "TYO", "paris": "PAR", "rome": "ROM",
-    "san francisco": "SFO", "new york": "NYC", "los angeles": "LAX",
-    "london": "LON", "madrid": "MAD", "barcelona": "BCN",
-    "berlin": "BER", "amsterdam": "AMS", "seoul": "SEL",
-    "beijing": "BJS", "shanghai": "SHA"
-}
-
-def get_city_code(city_name: str) -> Optional[str]:
-    """Find the IATA city code for a given city name using Amadeus API."""
-    city_name_lower = city_name.strip().lower()
-    if city_name_lower in CITY_CODE_CACHE:
-        return CITY_CODE_CACHE[city_name_lower]
-
-    try:
-        # Get Amadeus client
-        client_id = os.getenv("AMADEUS_API_KEY")
-        client_secret = os.getenv("AMADEUS_API_SECRET")
-        amadeus = Client(client_id=client_id, client_secret=client_secret)
-        
-        response = amadeus.reference_data.locations.get(
-            keyword=city_name,
-            subType="CITY"
-        )
-        results = response.data
-        if results:
-            return results[0].get("iataCode")
-        else:
-            return None
-    except Exception as e:
-        print(f"Error getting city code for {city_name}: {e}")
-        return None
-
-
+# -- Flight Searcher --
 class FlightSearcher:
     """Real flight search using Amadeus API - no mock data or estimates"""
-    
+
     def __init__(self):
-        """Initialize the flight searcher with Amadeus API credentials"""
-        client_id = os.getenv("AMADEUS_API_KEY")
-        client_secret = os.getenv("AMADEUS_API_SECRET")
-        
-        if not client_id or not client_secret:
+        if not amadeus:
             raise ValueError("Missing Amadeus API credentials. Please set AMADEUS_API_KEY and AMADEUS_API_SECRET environment variables.")
-        
-        self.amadeus = Client(client_id=client_id, client_secret=client_secret)
+        self.amadeus = amadeus
         
         # Enhanced city code cache for faster lookups
         self.city_codes = {
@@ -423,67 +268,56 @@ class FlightSearcher:
 
 
 # Function wrapper for compatibility with existing agent system
+# Decorator to expose as OpenAI tool
+# expose as OpenAI function
 def function_tool(func):
-    """Decorator to make functions compatible with OpenAI function calling."""
     func.openai_schema = {
         "name": func.__name__,
         "description": func.__doc__ or "",
-        "parameters": {}
+        "parameters": {
+            "type":"object",
+            "properties": {
+                "origin":      {"type":"string"},
+                "destination": {"type":"string"},
+                "dates":       {"type":"array","items":{"type":"string"}}
+            },
+            "required": ["destination","dates"]
+        }
     }
     return func
 
 @function_tool
 def flight_finder_tool(origin: str, destination: str, dates: list[str]) -> dict:
-    """Faster flight finder with immediate fallback"""
-    
-    if not destination:
-        return {"airline": "", "price": 0.0, "recommendation_reason": "No destination provided"}
-    
-    try:
-        dep_date, ret_date = parse_date_range_fuzzy(dates)
-        origin_code = get_city_code(origin or "Los Angeles")
-        dest_code = get_city_code(destination)
-        
-        if origin_code and dest_code:
-            # ✅ SINGLE API CALL with max=1 result
-            response = amadeus.shopping.flight_offers_search.get(
-                originLocationCode=origin_code,
-                destinationLocationCode=dest_code,
-                departureDate=dep_date,
-                returnDate=ret_date,
-                adults=1,
-                max=1  # ✅ ONLY GET 1 RESULT
-            )
-            
-            if response.data:
-                flight = response.data[0]
-                return {
-                    "origin": origin,
-                    "airline": flight['itineraries'][0]['segments'][0].get('carrierCode', 'Found'),
-                    "destination": destination,
-                    "departure_date": dep_date,
-                    "return_date": ret_date,
-                    "price": float(flight.get('price', {}).get('total', 0)),
-                    "direct_flight": len(flight['itineraries'][0]['segments']) == 1,
-                    "recommendation_reason": "Found via API"
-                }
-    except Exception as e:
-        print(f"Flight search failed, using estimate: {e}")
-    
-    # ✅ FAST FALLBACK - No API delays
-    estimated_price = 800.0 if any(city in destination.lower() for city in ['tokyo', 'paris', 'london']) else 350.0
-    
+    """
+    Faster flight finder with immediate fallback.
+    """
+    # normalize dates
+    dep_date, ret_date = parse_date_range_fuzzy(dates)
+
+    # look up city codes
+    orig_code = get_city_code(origin or "Los Angeles")
+    dest_code = get_city_code(destination)
+
+    if orig_code and dest_code:
+        # call the real searcher
+        return FlightSearcher().find_flight(
+            origin         = origin or "Los Angeles",
+            destination    = destination,
+            departure_date = dep_date,
+            return_date    = ret_date
+        )
+
+    # fallback estimate
     return {
         "origin": origin or "Los Angeles",
-        "airline": "Estimated",
         "destination": destination,
-        "departure_date": dep_date if 'dep_date' in locals() else "2025-07-01",
-        "return_date": ret_date if 'ret_date' in locals() else "2025-07-06", 
-        "price": estimated_price,
+        "departure_date": dep_date,
+        "return_date": ret_date,
+        "airline":"Estimated",
+        "price": 800.0 if destination.lower() in ["tokyo","paris","london"] else 350.0,
         "direct_flight": True,
-        "recommendation_reason": "Estimated due to API timeout"
+        "recommendation_reason":"Estimated due to missing IATA codes"
     }
-
 
 # Example usage
 if __name__ == "__main__":

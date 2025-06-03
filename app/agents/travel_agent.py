@@ -1,30 +1,28 @@
-# ─── Standard Library Imports ─────────────────────────────────────
+# ─── Standard Library Imports ───────────────────────────────────────────────
 import os
 import re
 import json
 import asyncio
-from datetime import datetime, timedelta
 import inspect
 
-# ─── Third-Party Library Imports ─────────────────────────────────
+# ─── Third-Party Library Imports ────────────────────────────────────────
 import openai
 from openai import AsyncOpenAI
-from dotenv import load_dotenv
 import requests
 from typing import List, Optional, Any
 from pydantic import BaseModel, Field
 
-# ─── Custom or Project-Specific Imports ──────────────────────────
+# ─── Custom or Project-Specific Imports ──────────────────────────────
 from amadeus import Client, ResponseError
 
 # -- Agent Imports --
-from .tools.hotel_search import hotel_finder_tool
-from .tools.flight_search import flight_finder_tool
-from app.agents.travel_agent import OptimizedRunner
+from app.agents.tools.hotel_search import hotel_finder_tool
+from app.agents.tools.flight_search import flight_finder_tool
+from app.agents.utils.dates import parse_date_range_fuzzy
+from app.agents.utils.nlp import extract_landmark_hint
+from app.config import AMA_CLIENT, OPENAI_API_KEY, MODEL_CHOICE
 
 
-# -- Load Environment Variables --
-load_dotenv()
 
 # -- Amadeus API Setup --
 client_id = os.getenv("AMADEUS_API_KEY")
@@ -62,205 +60,17 @@ def test_amadeus_connection():
         print(f"❌ Unexpected Amadeus error: {str(e)}")
         return False
 
-
 # -- Run API Tests --
 print("\n=== Testing Amadeus API Connection ===")
 api_working = test_amadeus_connection()
 print("=======================================\n")
 
 
-# -- Helper: Convert City Name to IATA Code --
-CITY_CODE_CACHE = {
-    "tokyo": "TYO",
-    "paris": "PAR",
-    "rome": "ROM",
-    "san francisco": "SFO",
-    "new york": "NYC",
-    "los angeles": "LAX",
-}
-
-def get_city_code(city_name: str) -> Optional[str]:
-    """Find the IATA city code for a given city name using Amadeus API."""
-    city_name_lower = city_name.strip().lower()
-    if city_name_lower in CITY_CODE_CACHE:
-        return CITY_CODE_CACHE[city_name_lower]
-
-    try:
-        response = amadeus.reference_data.locations.get(
-            keyword=city_name,
-            subType="CITY"
-        )
-        results = response.data
-        if results:
-            return results[0].get("iataCode")
-        else:
-            return None
-    except Exception as e:
-        print(f"Error getting city code for {city_name}: {e}")
-        return None
-
-    
-# -- Model Selection--
-
+# -- Model Selection --
 model = os.getenv("MODEL_CHOICE", "gpt-4o")
 
-# Helper Fuzzy Date Parsing -- 
-
-def parse_date_range_fuzzy(dates: list[str], duration_days: int = 5):
-    """
-    Parse dates from various formats including specific dates, relative terms, months, and seasons.
-    Returns tuple of (departure_date, return_date)
-    """
-    today = datetime.today()
-    max_future_date = today + timedelta(days=365)
-
-    def enforce_valid_date_range(dep: datetime.date, ret: datetime.date):
-        dep = max(dep, today.date())
-        ret = max(ret, dep)
-        dep = min(dep, max_future_date.date())
-        ret = min(ret, max_future_date.date())
-        return dep, ret
-
-    # Handle empty input
-    if not dates or len(dates) == 0:
-        dep, ret = enforce_valid_date_range(today.date() + timedelta(days=30),
-                                            today.date() + timedelta(days=30 + duration_days))
-        return str(dep), str(ret)
-
-    # Try to parse exact dates if there are two entries
-    try:
-        if len(dates) == 2:
-            for fmt in ["%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%B %d, %Y", "%b %d, %Y"]:
-                try:
-                    dep = datetime.strptime(dates[0], fmt).date()
-                    ret = datetime.strptime(dates[1], fmt).date()
-                    dep, ret = enforce_valid_date_range(dep, ret)
-                    return str(dep), str(ret)
-                except ValueError:
-                    continue
-    except Exception:
-        pass
-
-    # Process single fuzzy term
-    if len(dates) >= 1:
-        term = dates[0].strip().lower()
-        term = re.sub(r"[^a-z\s0-9]", "", term)
-
-     # ✅ NEW: Handle day trips and same-day travel
-        if any(phrase in term for phrase in ["for the day", "day trip", "same day", "one day"]):
-            dep, ret = enforce_valid_date_range(today.date(), today.date())
-            return str(dep), str(ret)
-
-        # ✅ NEW: Handle "today" more specifically
-        if "today" in term:
-            if "for the day" in term or "day trip" in term:
-                # Same day trip
-                dep, ret = enforce_valid_date_range(today.date(), today.date())
-                return str(dep), str(ret)
-            else:
-                # Multi-day trip starting today
-                dep, ret = enforce_valid_date_range(today.date(), today.date() + timedelta(days=duration_days))
-                return str(dep), str(ret)
-
-        # ✅ FIXED: Handle "last week of [month]" patterns
-        if "last week of" in term:
-            month_lookup = {
-                "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
-                "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
-                "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
-                "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12
-            }
-            
-            for month_name, month_num in month_lookup.items():
-                if month_name in term:
-                    # Calculate last week of the month
-                    year = today.year if today.month <= month_num else today.year + 1
-                    
-                    # Find last day of month
-                    if month_num == 12:
-                        last_day = datetime(year + 1, 1, 1) - timedelta(days=1)
-                    else:
-                        last_day = datetime(year, month_num + 1, 1) - timedelta(days=1)
-                    
-                    # Find the Monday of the last week
-                    days_to_monday = (last_day.weekday() + 1) % 7
-                    last_monday = last_day - timedelta(days=days_to_monday + 6)  # Previous Monday
-                    
-                    dep_raw = last_monday.date()
-                    ret_raw = dep_raw + timedelta(days=duration_days)
-                    
-                    dep, ret = enforce_valid_date_range(dep_raw, ret_raw)
-                    return str(dep), str(ret)
-
-        # Handle other patterns (keeping existing logic)
-        if "today" in term:
-            dep, ret = enforce_valid_date_range(today.date(), today.date() + timedelta(days=duration_days))
-            return str(dep), str(ret)
-
-        if "tomorrow" in term:
-            dep, ret = enforce_valid_date_range(today.date() + timedelta(days=1),
-                                                today.date() + timedelta(days=1 + duration_days))
-            return str(dep), str(ret)
-
-        if "next week" in term:
-            next_monday = today + timedelta(days=(7 - today.weekday()))
-            dep, ret = enforce_valid_date_range(next_monday.date(), next_monday.date() + timedelta(days=duration_days))
-            return str(dep), str(ret)
-
-        if "next month" in term:
-            if today.month == 12:
-                dep_raw = datetime(today.year + 1, 1, 15).date()
-            else:
-                dep_raw = datetime(today.year, today.month + 1, 15).date()
-            dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
-            return str(dep), str(ret)
-
-        # Month detection (existing logic)
-        month_lookup = {
-            "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
-            "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
-            "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
-            "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12
-        }
-
-        for word, month in month_lookup.items():
-            if word in term:
-                base_day = 15
-                if "early" in term:
-                    base_day = 5
-                elif "mid" in term:
-                    base_day = 15
-                elif "late" in term or "end" in term:
-                    base_day = 25
-
-                year = today.year if today.month <= month else today.year + 1
-                dep_raw = datetime(year, month, base_day).date()
-                dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
-                return str(dep), str(ret)
-
-        # Seasonal patterns (existing logic)
-        seasonal = {
-            "winter": ("january", 15),
-            "spring": ("april", 15), 
-            "summer": ("july", 15),
-            "fall": ("october", 15),
-            "autumn": ("october", 15)
-        }
-
-        for season, (month_word, day) in seasonal.items():
-            if season in term:
-                month = month_lookup[month_word]
-                year = today.year if today.month <= month else today.year + 1
-                dep_raw = datetime(year, month, day).date()
-                dep, ret = enforce_valid_date_range(dep_raw, dep_raw + timedelta(days=duration_days))
-                return str(dep), str(ret)
-
-    # Final fallback
-    dep, ret = enforce_valid_date_range(today.date() + timedelta(days=30),
-                                        today.date() + timedelta(days=30 + duration_days))
-    return str(dep), str(ret)
-
 # ─── Models and Agent Classes (Schemas, Not Instances) ──────────────────────
+
 class Agent:
     def __init__(self, name, instructions, model, output_type=None, tools=None, handoffs=None):
         self.name = name
@@ -291,25 +101,25 @@ class Agent:
         if pre_extracted_inputs is None and self.name in ["Flight Agent", "Hotel Agent"]:
             analysis_prompt = f"""Extract the following information from the user's travel request:
 
-    - Origin city (default to "Los Angeles" if not provided)
-    - Destination city (required)
-    - Travel dates (list of strings, rough time periods are OK)
-    - Trip duration in days (default 5 if missing)
-    - Budget (optional)
+- Origin city (default to "Los Angeles" if not provided)
+- Destination city (required)
+- Travel dates (list of strings, rough time periods are OK)
+- Trip duration in days (default 5 if missing)
+- Budget (optional)
 
-    Always respond ONLY with pure JSON:
-    {{
-    "origin": "...",
-    "destination": "...",
-    "dates": ["..."],
-    "duration_days": 5,
-    "budget": 3000.0
-    }}
+Always respond ONLY with pure JSON:
+{{
+"origin": "...",
+"destination": "...",
+"dates": ["..."],
+"duration_days": 5,
+"budget": 3000.0
+}}
 
-    If anything is missing, make reasonable assumptions. DO NOT ask clarifying questions. Assume defaults.
+If anything is missing, make reasonable assumptions. DO NOT ask clarifying questions. Assume defaults.
 
-    User request: "{query}"
-    """
+User request: "{query}"
+"""
             extraction_response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -325,9 +135,7 @@ class Agent:
             except Exception as e:
                 print(f"Failed to extract inputs: {e}")
                 pre_extracted_inputs = None
-
         # 🛠️ Regular agent message flow
-        # Safely stringify if query is structured input (dict)
         if isinstance(query, dict):
             query_text = json.dumps(query, indent=2)
         else:
@@ -337,7 +145,6 @@ class Agent:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": query_text}
         ]
-
 
         functions = []
         function_name_map = {}
@@ -355,6 +162,7 @@ class Agent:
         )
 
         choice = response.choices[0]
+        content = choice.message.content  # ✅ ensures content is always defined
 
         # 🛠️ If the model called a tool
         if choice.finish_reason == "function_call":
@@ -399,8 +207,7 @@ class Agent:
                 )
 
                 choice = response.choices[0]
-
-        content = choice.message.content
+                content = choice.message.content
 
         # Guardrail: if model asks clarifying questions, raise an error
         if content and any(phrase in content.lower() for phrase in ["could you", "can you", "please provide", "may i know"]):
@@ -427,9 +234,12 @@ class TravelPlan(BaseModel):
     destination: str = Field(description="The user's preferred destination")
     duration_days: int = Field(description="The length of the trip")
     dates: list[str] = Field(description="The rough time period of the trip, such as ['late June', 'early July', 'Summer', 'Winter', or specific dates like '2024-07-01 to 2024-07-10']")
-    budget: float = Field(description="The user's budget for the trip")
+    budget: float = Field(description="The user's total budget for the trip")
+    amenities: Optional[List[str]] = Field(default_factory=list, description="Requested hotel amenities like gym, pool, spa, etc.")
+    location_preferences: Optional[str] = Field(default="", description="Location-related hotel preferences, e.g., 'near Shibuya' or 'walkable to downtown'")
     activities: list[str] = Field(description="A list of activities to do in the destination")
     notes: Optional[str] = Field(default=None, description="Any additional information about the trip")
+
 
 class FlightRecommendation(BaseModel):
     origin: str = Field(description="The origin city")
@@ -449,7 +259,7 @@ class HotelRecommendation(BaseModel):
     price_per_night: float = Field(description="The price per night for the hotel")
     amenities: list[str] = Field(description="The amenities available at the hotel, i.e. pool, gym, etc.")
     recommendation_reason: str = Field(description="The reason for the recommendation")
-    
+
 # -- Helper Function to Convert Functions to OpenAI-Compatible Tools -- 
 def function_tool(func):
     """Wraps a function and attaches an OpenAI schema to it."""
@@ -458,48 +268,15 @@ def function_tool(func):
         "description": func.__doc__ or "",
         "parameters": {}  # Can fill later if needed
     }
-    return func  # <-- No need to create `.func` or anything fancy
+    return func
 
 # # ─── Tools (Functions Available to Agents) ──────────────────────
-
-@function_tool
-def get_current_weather(city: Optional[str] = None) -> str:
-    """Get the current weather for a specific city using OpenWeatherMap API"""
-    if not city:
-        return "Weather information is currently unavailable because no city was provided."
-
-    api_key = os.getenv("OPENWEATHER_API_KEY")
-    if not api_key:
-        return f"Weather information is currently unavailable. Please check a weather service for current conditions in {city}."
-
-    url = "http://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "q": city,
-        "appid": api_key,
-        "units": "metric"
-    }
-
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        if "weather" not in data or "main" not in data:
-            return f"Weather information is currently unavailable for {city}."
-        
-        return f"The current weather in {city} is {data['weather'][0]['description']} with a temperature of {data['main']['temp']}°C (feels like {data['main']['feels_like']}°C). Note: this weather report is for the current day."
-    
-    except Exception as e:
-        print(f"Error getting current weather for {city}: {e}")
-        return f"Weather information is currently unavailable. Please check a weather service for current conditions in {city}."
-    
-# -- Agent Instances (Objects) ───────────────────────────────────────────────────────
 
 # -- Hotel Agent Object --
 hotel_agent = Agent( 
     name="Hotel Agent",
     instructions="""
-You are a hotel booking specialist responsible for finding the best accommodations.
+You are a hotel booking specialist responsible for finding the best accommodations based on the user's preferences, including amenities, location, and price.
 
 YOU MUST ALWAYS RETURN A VALID JSON OBJECT MATCHING THE HotelRecommendation SCHEMA.
 Even if no hotel is needed (for example, if check-in and check-out dates are the same), 
@@ -533,12 +310,23 @@ EXAMPLES:
   "recommendation_reason": "No hotel needed for a same-day trip."
 }
 
+elif subagent.name == "Hotel Agent":
+    tasks.append(subagent.run({
+        "destination": primary_output.destination,
+        "checkin_date": dep_date,
+        "checkout_date": ret_date,
+        "budget": primary_output.budget * 0.4,
+        "preferences": combined_prefs,
+        "landmark_hint": landmark_hint  # ✅ NEW
+    }, history))
+
+
 =========================================
 
 CRITICAL RULES:
 - Always use the 'HotelRecommendation' structure.
 - Even if no hotel is needed, you must still populate all fields.
-- 'recommendation_reason' must clearly explain the situation.
+- 'recommendation_reason' must clearly explain the situation in 2-3 sentences.
 
 """,
     model=model,
@@ -590,7 +378,7 @@ Steps:
 travel_agent = Agent(
     name="Travel Agent",
     instructions="""
-You are a comprehensive travel agent responsible for planning end-to-end trips based on user requests.
+You are a comprehensive travel agent responsible for planning end-to-end trips based on user requests including preferences, activities, and budget.
 
 You MUST respond with a valid JSON object matching the TravelPlan schema.  
 No extra text, no greetings, no markdown formatting, no bullet points outside of the JSON structure.  
@@ -606,7 +394,7 @@ YOUR EXACT WORKFLOW:
    - Extract trip duration in days
    - Extract total trip budget
    - Extract interests and preferred activities
-   - Extract hotel preferences (e.g., location, amenities like pool)
+   - Extract hotel preferences (e.g., pool, spa, near downtown) and populate the `preferences` field.
    - Determine if this is a day trip (no hotel needed)
 
 If any required field is missing, make a reasonable assumption and mention this in the "notes" field of the final plan.
@@ -630,7 +418,7 @@ If any required field is missing, make a reasonable assumption and mention this 
    - If day trip: Skip hotel search and return empty hotel recommendation
    - If multi-day trip: Call hotel_agent using flight dates
    - Pass adjusted hotel budget after accounting for flight cost
-   - Include special requests (e.g., "hotel with pool")
+   - Pass the hotel preferences to the hotel_agent (include special requests like locations (e.g. "near the Eiffel Tower") and amenities (e.g., "hotel with pool"))
    - If hotel search fails, still proceed with best estimates
 
 5. BUILD FINAL TRAVEL PLAN:
@@ -676,12 +464,11 @@ EXAMPLE RESPONSE:
     model=model,
     output_type=TravelPlan,
     handoffs=[flight_agent, hotel_agent],
-    tools=[get_current_weather]
 )
 
 # ─── Runner and Result Classes ───────────────────────────────────────
 
-class OptimizedRunner:
+class Runner:
     @staticmethod
     async def run(agent: Agent, input_text: str):
         """Run agents in parallel instead of sequential"""
@@ -694,32 +481,43 @@ class OptimizedRunner:
         
         # Step 2: Run handoff agents IN PARALLEL
         if agent.handoffs and isinstance(primary_output, TravelPlan):
-            # Create tasks for parallel execution
             tasks = []
-            
+
+            # Extract travel dates from primary_output
+            dep_date, ret_date = parse_date_range_fuzzy(
+                primary_output.dates, primary_output.duration_days
+            )
+
+            # Combine preferences from amenities and location
+            amenities = getattr(primary_output, "amenities", [])
+            location = getattr(primary_output, "location_preferences", "")
+            combined_prefs = ", ".join(filter(None, amenities + [location.strip()]))
+
+            # Optional: extract a landmark string from natural language if needed
+            landmark_hint = await extract_landmark_hint(combined_prefs, primary_output.destination)
+
             for subagent in agent.handoffs:
                 if subagent.name == "Flight Agent":
                     tasks.append(subagent.run(input_text, history))
+
                 elif subagent.name == "Hotel Agent":
-                    # Use flight dates if available
-                    dep_date, ret_date = parse_date_range_fuzzy(
-                        primary_output.dates, primary_output.duration_days
-                    )
-                    hotel_inputs = {
+                    tasks.append(subagent.run({
                         "destination": primary_output.destination,
                         "checkin_date": dep_date,
                         "checkout_date": ret_date,
                         "budget": primary_output.budget * 0.4,
-                        "preferences": ""
-                    }
-                    tasks.append(subagent.run(hotel_inputs, history))
-            
-            # ✅ PARALLEL EXECUTION
+                        "preferences": combined_prefs,
+                        "landmark_hint": landmark_hint
+                    }, history))
+
             if tasks:
                 sub_results = await asyncio.gather(*tasks, return_exceptions=True)
                 outputs.extend([r for r in sub_results if not isinstance(r, Exception)])
-        
+
         return SimpleResult(outputs)
+
+
+
 
 class SimpleResult:
     def __init__(self, outputs: List[Any]):
@@ -750,7 +548,7 @@ async def main():
         print("\n" + "="*50)
         print(f"Query: {query}\n")
 
-        result = await OptimizedRunner.run(travel_agent, query)
+        result = await Runner.run(travel_agent, query)
 
         flight = None
         hotel = None
