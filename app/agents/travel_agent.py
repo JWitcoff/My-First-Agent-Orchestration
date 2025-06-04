@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from amadeus import Client, ResponseError
 
 # -- Agent Imports --
-from app.agents.tools.hotel_search import hotel_finder_tool
+from app.agents.tools.google_hotel_searcher import google_hotel_finder_tool
 from app.agents.tools.flight_search import flight_finder_tool
 from app.agents.utils.dates import parse_date_range_fuzzy
 from app.agents.utils.nlp import extract_landmark_hint
@@ -330,7 +330,7 @@ CRITICAL RULES:
 
 """,
     model=model,
-    tools=[hotel_finder_tool],
+    tools=[google_hotel_finder_tool],
     output_type=HotelRecommendation
 )
 
@@ -495,6 +495,8 @@ class Runner:
 
             # Optional: extract a landmark string from natural language if needed
             landmark_hint = await extract_landmark_hint(combined_prefs, primary_output.destination)
+            print(f"🧭 Landmark Hint Extracted: {landmark_hint}")
+
 
             for subagent in agent.handoffs:
                 if subagent.name == "Flight Agent":

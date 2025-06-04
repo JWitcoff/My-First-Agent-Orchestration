@@ -1,6 +1,9 @@
 from datetime import datetime
 from typing import List, Dict, Optional
 from app.config import AMA_CLIENT as amadeus
+from app.agents.tools.google_hotel_searcher import GoogleHotelSearcher
+import requests
+import os
 
 class HotelSearcher:
     """Strict hotel search using Amadeus API only – no fallback estimates."""
@@ -19,6 +22,27 @@ class HotelSearcher:
             "tokyo": "TYO", "paris": "PAR", "rome": "ROM",
             "san francisco": "SFO", "new york": "NYC", "los angeles": "LAX"
         }
+
+    def get_lat_lng_from_google(self, query: str) -> Optional[Dict[str, float]]:
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("Missing Google Maps API key.")
+
+        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        params = {"query": query, "key": api_key}
+        try:
+            res = requests.get(url, params=params)
+            data = res.json()
+            if data.get("status") == "OK" and data.get("results"):
+                loc = data["results"][0]["geometry"]["location"]
+                print(f"📍 Google resolved '{query}' to: {loc}")
+                return {"latitude": loc["lat"], "longitude": loc["lng"]}
+            else:
+                print(f"⚠️ Google couldn't resolve query '{query}': {data.get('status')}")
+        except Exception as e:
+            print(f"❌ Error querying Google Places API: {e}")
+        return None
+
 
     def find_hotel(self,
                    destination: str,
@@ -124,6 +148,8 @@ class HotelSearcher:
                     if preference_keywords else True
                 )
 
+                print(f"🏨 {name} @ {hotel.get('latitude')}, {hotel.get('longitude')}")
+
                 successful_hotels.append({
                     "hotelId": hotel_id,
                     "name": name,
@@ -171,10 +197,13 @@ class HotelSearcher:
             return code
         return None
 
-    def _geocode_landmark(self,
-                          query: str,
-                          city_hint: str = "") -> Optional[Dict[str, float]]:
-        """Use Amadeus location API to geocode a landmark name."""
+    def _geocode_landmark(self, query: str, city_hint: str = "") -> Optional[Dict[str, float]]:
+    # Try Google first
+        google_result = self.get_lat_lng_from_google(f"{query} {city_hint}")
+        if google_result:
+            return google_result
+
+        # Fallback to Amadeus if Google fails
         try:
             full_query = f"{query} {city_hint}".strip()
             res = self.amadeus.reference_data.locations.get(
@@ -189,13 +218,14 @@ class HotelSearcher:
                         "longitude": geo["longitude"]
                     }
         except Exception as e:
-            print(f"❌ Failed to geocode landmark '{query}': {e}")
+            print(f"❌ Failed to geocode landmark with Amadeus '{query}': {e}")
         return None
 
+
     def _get_hotels_by_geocode(self,
-                               lat: float,
-                               lon: float,
-                               radius_km: int = 8) -> List[Dict]:
+                           lat: float,
+                           lon: float,
+                           radius_km: int = 2) -> List[Dict]:
         try:
             res = self.amadeus.reference_data.locations.hotels.by_geocode.get(
                 latitude=lat,
@@ -203,17 +233,36 @@ class HotelSearcher:
                 radius=radius_km,
                 radiusUnit="KM"
             )
-            # Flatten each entry to the inner "hotel" dict
-            return [entry["hotel"] for entry in res.data] if res.data else []
+            if not res.data:
+                return []
+
+            # Check structure: use "hotel" field if present, else assume top-level hotel object
+            first = res.data[0]
+            if isinstance(first, dict) and "hotel" in first:
+                return [entry["hotel"] for entry in res.data]
+            else:
+                return list(res.data)
+
         except Exception as e:
             print(f"❌ Failed to fetch hotels by geocode: {e}")
             return []
 
+
     def _get_hotels(self, city_code: str) -> List[Dict]:
-        res = self.amadeus.reference_data.locations.hotels.by_city.get(
-            cityCode=city_code
-        )
-        return [entry["hotel"] for entry in res.data] if res.data else []
+        try:
+            res = self.amadeus.reference_data.locations.hotels.by_city.get(cityCode=city_code)
+        except Exception as e:
+            print(f"❌ Hotel city search API error: {e}")
+            return []
+        if not res.data:
+            return []
+        # If data entries have a 'hotel' key, flatten them; otherwise use the data as-is.
+        first = res.data[0]
+        if isinstance(first, dict) and "hotel" in first:
+            return [entry["hotel"] for entry in res.data]
+        else:
+            return list(res.data)
+
 
     def _convert_currency(self, price: float, currency: str) -> float:
         rates = {"JPY": 0.0067, "EUR": 1.08, "GBP": 1.25}
@@ -295,7 +344,8 @@ def hotel_finder_tool(destination: str,
                       budget: float,
                       preferences: str = "",
                       landmark_hint: str = "") -> dict:
-    """Find hotels using ONLY real Amadeus data."""
-    return HotelSearcher().find_hotel(
-        destination, checkin_date, checkout_date, budget, preferences, landmark_hint
+    """Find hotels using Google Places API based on user preferences and location."""
+    return GoogleHotelSearcher().find_hotels_with_preferences(
+        query=f"{landmark_hint} {destination}" if landmark_hint else destination,
+        preferences=preferences
     )
