@@ -6,3 +6,5 @@ openai
 pydantic
 python-dotenv
 requests
+gunicorn>=21.2.0
+gunicorn>=21.2.0
