@@ -345,7 +345,11 @@ def hotel_finder_tool(destination: str,
                       preferences: str = "",
                       landmark_hint: str = "") -> dict:
     """Find hotels using Google Places API based on user preferences and location."""
-    return GoogleHotelSearcher().find_hotels_with_preferences(
-        query=f"{landmark_hint} {destination}" if landmark_hint else destination,
-        preferences=preferences
+    return GoogleHotelSearcher().find_hotel(  # ✅ Correct method name
+        destination=destination,
+        checkin_date=checkin_date,
+        checkout_date=checkout_date,
+        total_budget=budget,
+        preferences=preferences,
+        landmark_hint=landmark_hint
     )

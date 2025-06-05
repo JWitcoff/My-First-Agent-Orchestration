@@ -137,6 +137,10 @@ class FlightSearcher:
                 # Ensure return is after departure
                 if ret_dt < dep_dt:
                     ret_dt = dep_dt + timedelta(days=1)
+
+                if ret_dt <= dep_dt:
+                    ret_dt = dep_dt + timedelta(days=1)
+
                 elif ret_dt > max_future_date:
                     ret_dt = max_future_date
                 
@@ -286,20 +290,30 @@ def function_tool(func):
     }
     return func
 
+def is_valid_date(date_str):
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+    
 @function_tool
 def flight_finder_tool(origin: str, destination: str, dates: list[str]) -> dict:
     """
     Faster flight finder with immediate fallback.
     """
-    # normalize dates
-    dep_date, ret_date = parse_date_range_fuzzy(dates)
+    # Validate format and use directly if ISO format is detected
+    if len(dates) == 2 and all(is_valid_date(d) for d in dates):
+        dep_date, ret_date = dates
+    else:
+        # fallback to fuzzy parsing
+        dep_date, ret_date = parse_date_range_fuzzy(dates)
 
-    # look up city codes
+    # lookup city codes
     orig_code = get_city_code(origin or "Los Angeles")
     dest_code = get_city_code(destination)
 
     if orig_code and dest_code:
-        # call the real searcher
         return FlightSearcher().find_flight(
             origin         = origin or "Los Angeles",
             destination    = destination,
@@ -307,7 +321,6 @@ def flight_finder_tool(origin: str, destination: str, dates: list[str]) -> dict:
             return_date    = ret_date
         )
 
-    # fallback estimate
     return {
         "origin": origin or "Los Angeles",
         "destination": destination,
@@ -318,7 +331,6 @@ def flight_finder_tool(origin: str, destination: str, dates: list[str]) -> dict:
         "direct_flight": True,
         "recommendation_reason":"Estimated due to missing IATA codes"
     }
-
 # Example usage
 if __name__ == "__main__":
     # Example 1: Using the class directly (for standalone use)

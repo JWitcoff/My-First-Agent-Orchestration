@@ -27,7 +27,7 @@ class GoogleHotelSearcher:
             return {"recommendation_reason": f"Could not resolve landmark: '{query}'"}
 
         lat, lng = coords["lat"], coords["lng"]
-        print("🌐 [GOOGLE HOTEL SEARCH TRIGGERED]")
+        print(f"📍 Google resolved '{query}' to: ({lat}, {lng})")
 
         hotels = self._search_hotels_nearby(lat, lng)
         if not hotels:
@@ -86,30 +86,6 @@ def google_hotel_finder_tool(destination: str,
                              budget: float,
                              preferences: str = "",
                              landmark_hint: str = "") -> dict:
-    searcher = GoogleHotelSearcher()
-    results = searcher.find_hotel(destination, checkin_date, checkout_date, budget, preferences, landmark_hint)
-
-    matches = results.get("top_matches")
-    if not matches:
-        return {
-            "name": "",
-            "destination": destination,
-            "checkin_date": checkin_date,
-            "checkout_date": checkout_date,
-            "price_per_night": 0.0,
-            "amenities": [],
-            "recommendation_reason": results.get("recommendation_reason", "No hotel found.")
-        }
-
-    top = matches[0]
-
-    return {
-        "name": top["name"],
-        "destination": destination,
-        "checkin_date": checkin_date,
-        "checkout_date": checkout_date,
-        "price_per_night": 180.0,  # placeholder
-        "amenities": ["WiFi", "Pool"],  # placeholder
-        "recommendation_reason": f"Found hotel near {landmark_hint or destination} with high rating."
-    }
-
+    return GoogleHotelSearcher().find_hotel(
+        destination, checkin_date, checkout_date, budget, preferences, landmark_hint
+    )

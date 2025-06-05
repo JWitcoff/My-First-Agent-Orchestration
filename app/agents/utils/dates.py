@@ -11,10 +11,20 @@ def parse_date_range_fuzzy(dates: List[str], duration_days: int = 5) -> Tuple[st
     max_future = today + timedelta(days=365)
 
     def clamp(dep, ret):
-        dep = max(dep, today.date())
-        ret = max(ret, dep)
-        dep = min(dep, max_future.date())
-        ret = min(ret, max_future.date())
+        # Calculate original duration
+        original_duration = (ret - dep).days
+        
+        # If departure is in the past, bump it to today
+        if dep < today.date():
+            dep = today.date()
+            ret = dep + timedelta(days=original_duration)  # Preserve duration!
+        
+        # Ensure dates don't exceed max_future
+        if ret > max_future.date():
+            ret = max_future.date()
+            dep = ret - timedelta(days=original_duration)
+            dep = max(dep, today.date())  # Don't go back to past
+        
         return dep, ret
 
     # no dates → assume 30 days out for duration_days
@@ -91,3 +101,5 @@ def parse_date_range_fuzzy(dates: List[str], duration_days: int = 5) -> Tuple[st
     dep, ret = clamp(today.date()+timedelta(days=30),
                      today.date()+timedelta(days=30+duration_days))
     return str(dep), str(ret)
+
+

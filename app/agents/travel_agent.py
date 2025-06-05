@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from amadeus import Client, ResponseError
 
 # -- Agent Imports --
-from app.agents.tools.google_hotel_searcher import google_hotel_finder_tool
+from app.agents.tools.hotel_search import hotel_finder_tool
 from app.agents.tools.flight_search import flight_finder_tool
 from app.agents.utils.dates import parse_date_range_fuzzy
 from app.agents.utils.nlp import extract_landmark_hint
@@ -237,7 +237,7 @@ class TravelPlan(BaseModel):
     budget: float = Field(description="The user's total budget for the trip")
     amenities: Optional[List[str]] = Field(default_factory=list, description="Requested hotel amenities like gym, pool, spa, etc.")
     location_preferences: Optional[str] = Field(default="", description="Location-related hotel preferences, e.g., 'near Shibuya' or 'walkable to downtown'")
-    activities: list[str] = Field(description="A list of activities to do in the destination")
+    activities: list[str] = Field(description="A list of specific, location-based activities to do in the destination")
     notes: Optional[str] = Field(default=None, description="Any additional information about the trip")
 
 
@@ -330,7 +330,7 @@ CRITICAL RULES:
 
 """,
     model=model,
-    tools=[google_hotel_finder_tool],
+    tools=[hotel_finder_tool],
     output_type=HotelRecommendation
 )
 
@@ -378,87 +378,68 @@ Steps:
 travel_agent = Agent(
     name="Travel Agent",
     instructions="""
-You are a comprehensive travel agent responsible for planning end-to-end trips based on user requests including preferences, activities, and budget.
+You are a comprehensive travel agent responsible for extracting and organizing travel information from user requests.
 
-You MUST respond with a valid JSON object matching the TravelPlan schema.  
-No extra text, no greetings, no markdown formatting, no bullet points outside of the JSON structure.  
+You MUST respond with a valid JSON object matching the TravelPlan schema.
+No extra text, no greetings, no markdown formatting.
 Only pure, valid JSON output.
 
 =========================================
 YOUR EXACT WORKFLOW:
 
-1. ANALYZE USER REQUEST:
-   - Extract origin city (default to "Los Angeles" if not provided)
-   - Extract destination city (required)
-   - Extract travel dates or general timeframe (e.g., "late June")
-   - Extract trip duration in days
-   - Extract total trip budget
-   - Extract interests and preferred activities
-   - Extract hotel preferences (e.g., pool, spa, near downtown) and populate the `preferences` field.
-   - Determine if this is a day trip (no hotel needed)
+1. ANALYZE USER REQUEST AND EXTRACT ALL DATA:
+   - Extract destination, dates, budget, duration, activities
+   - CRITICAL: Always extract hotel amenities and location preferences:
 
-If any required field is missing, make a reasonable assumption and mention this in the "notes" field of the final plan.
+   FOR AMENITIES: Look for words like "pool", "gym", "spa", "breakfast", "wifi"
+   FOR LOCATION: Look for phrases like "near [landmark]", "by [location]", "close to [place]"
 
-2. CALL FLIGHT AGENT:
-   - Call flight_agent with extracted information.
-   - For day trips, set one_way=True if supported.
-   - Use specific dates if provided, or estimate if necessary.
-   - Always provide origin, destination, and intended travel dates.
+   Examples of what to extract:
+   • "hotel with a pool near Shibuya" → amenities: ["pool"], location_preferences: "near Shibuya"
+   • "stay by the Eiffel Tower" → amenities: [], location_preferences: "by the Eiffel Tower"
+   • "near Golden Gate Bridge with gym" → amenities: ["gym"], location_preferences: "near Golden Gate Bridge"
 
-3. ANALYZE FLIGHT RESULTS:
-   - If flight was found successfully, extract its price and dates.
-   - If the flight_agent reports an API error, use estimated prices:
-     * Domestic flights: $300–500
-     * International short-haul: $600–1000
-     * International long-haul: $1000–1800
-   - Use provided or estimated departure_date and return_date.
+   YOU MUST populate the amenities and location_preferences fields in your JSON response.
 
-4. CALL HOTEL AGENT:
-   - FIRST check if this is a day trip (same checkin/checkout dates)
-   - If day trip: Skip hotel search and return empty hotel recommendation
-   - If multi-day trip: Call hotel_agent using flight dates
-   - Pass adjusted hotel budget after accounting for flight cost
-   - Pass the hotel preferences to the hotel_agent (include special requests like locations (e.g. "near the Eiffel Tower") and amenities (e.g., "hotel with pool"))
-   - If hotel search fails, still proceed with best estimates
-
-5. BUILD FINAL TRAVEL PLAN:
-Return a JSON object with EXACTLY these fields:
-
-{
-  "destination": string,           // The city name (e.g., "Tokyo")
-  "duration_days": integer,         // Trip length in days
-  "dates": array of strings,        // List of dates or date range
-  "budget": float,                  // Total trip budget
-  "activities": array of strings,   // Plain-text list of activities
-  "notes": string (optional)        // Notes about any assumptions
+2. BUILD FINAL TRAVEL PLAN:
+    Return a JSON object with EXACTLY these fields:
+    {
+    "destination": string,           // The city name (e.g., "Tokyo")
+    "duration_days": integer,        // Trip length in days
+    "dates": array of strings,       // List of dates or date range
+    "budget": float,                 // Total trip budget
+    "amenities": array of strings,   // Hotel amenities like ["pool", "gym"]
+    "location_preferences": string,  // Location like "near Shibuya Crossing"
+    "activities": array of strings,  // Plain-text list of activities that are specific to the destination (i.e. "Visit historical temples like Senso-ji", "Explore outdoor gardens like Ueno Park", "Visit museums like the Tokyo National Museum")
+    "notes": string (optional)       // Notes about any assumptions
 }
 
-IMPORTANT:
-- The "activities" array must be simple text descriptions (not objects).
-- If assumptions are made (like guessing dates or budget estimates), mention them in "notes."
-- You MUST use destination, dates, and price estimates derived from earlier steps.
-- Always generate a complete TravelPlan even if some data is missing.
+CRITICAL DATE RULE:
+- NEVER generate dates in the past
+- If user says "Jan 1 to Jan 8" without year, assume NEXT occurrence (2026-01-01 to 2026-01-08)
+- BUT if a user says "Winter 2025" or "Summer 2025", assume the current year (2025)
+- All dates must be in the future (after 2025-06-04)
 
-=========================================
-ABSOLUTE RULES FOR OUTPUT:
-- Output must be a **pure JSON object**.
-- No introductions, no headers, no prose, no markdown.
-- No text before or after the JSON.
-- No bullet points outside the JSON fields.
+CRITICAL BUDGET RULE:
+- If no budget is provided, estimate a reasonable budget based on:
+  * Domestic trips: $1000-2000 
+  * International trips: $2000-5000
+- NEVER use null for budget - always provide a number
+- If an estimated budget is needed, mention this in the "notes" field of the final plan.
 
-When you are ready to respond:  
-Immediately output the JSON object. No explanations.
+When you are ready to respond: Immediately output the JSON object. No explanations.
 
 =========================================
 EXAMPLE RESPONSE:
-
 {
   "destination": "Tokyo",
   "duration_days": 5,
-  "dates": ["2024-06-25", "2024-06-30"],
-  "budget": 5000.0,
-  "activities": ["Visit historical temples", "Explore outdoor gardens", "Visit museums"],
-  "notes": "Dates estimated based on late June request. Flight price estimated due to API timeout."
+  "dates": ["2025-06-25", "2025-06-30"],
+  "budget": 5000.0, (or estimated budget if no budget is provided)
+  "amenities": ["pool"],
+  "location_preferences": "near Shibuya Crossing",
+  "activities": ["Visit historical temples like Senso-ji", "Explore outdoor gardens like Ueno Park", "Visit museums like the Tokyo National Museum"],
+  "notes": "Dates estimated based on late June request. Budget estimated based on domestic trip."
 }
 """,
     model=model,
@@ -483,15 +464,25 @@ class Runner:
         if agent.handoffs and isinstance(primary_output, TravelPlan):
             tasks = []
 
-            # Extract travel dates from primary_output
+            print(f"🐛 primary_output.dates: {primary_output.dates}")
+            print(f"🐛 primary_output.duration_days: {primary_output.duration_days}")
+
             dep_date, ret_date = parse_date_range_fuzzy(
                 primary_output.dates, primary_output.duration_days
             )
+
+            print(f"🐛 Parsed result: {dep_date} to {ret_date}")
+
 
             # Combine preferences from amenities and location
             amenities = getattr(primary_output, "amenities", [])
             location = getattr(primary_output, "location_preferences", "")
             combined_prefs = ", ".join(filter(None, amenities + [location.strip()]))
+            
+            # Landmark Debugging
+            print(f"🐛 amenities: {amenities}")
+            print(f"🐛 location_preferences: '{location}'")  
+            print(f"🐛 combined_prefs: '{combined_prefs}'")
 
             # Optional: extract a landmark string from natural language if needed
             landmark_hint = await extract_landmark_hint(combined_prefs, primary_output.destination)
@@ -500,7 +491,14 @@ class Runner:
 
             for subagent in agent.handoffs:
                 if subagent.name == "Flight Agent":
-                    tasks.append(subagent.run(input_text, history))
+                    tasks.append(subagent.run({
+                        "origin": "Los Angeles",  # or extract from primary_output
+                        "destination": primary_output.destination,
+                        "departure_date": dep_date,
+                        "return_date": ret_date,
+                        "budget": primary_output.budget * 0.6,
+                        "dates": [dep_date, ret_date]
+                    }, history))
 
                 elif subagent.name == "Hotel Agent":
                     tasks.append(subagent.run({
@@ -517,8 +515,6 @@ class Runner:
                 outputs.extend([r for r in sub_results if not isinstance(r, Exception)])
 
         return SimpleResult(outputs)
-
-
 
 
 class SimpleResult:
@@ -539,11 +535,11 @@ class SimpleResult:
 
 async def main():
     queries = [
-        "I want to go to Tokyo for 5 days in late June on a budget of $5000. I love history and the outdoors. I want to stay in a hotel with a pool.",
+        "I want to go to Tokyo for 5 days in late June on a budget of $5000. I love history and the outdoors. I want to stay in a hotel with a pool and be near the Shibuya Crossing.",
         "I'm going to Paris for 3 days during the winter. I like to eat good food and explore local culture. I want to stay at a hotel near the Eiffel Tower.",
         "I'm going to San Francisco from Jan 1 to Jan 8. I like to hike and explore nature. Ideally near the Golden Gate Bridge.",
-        "I'm thinking of going to Rome for a week in late Summer. I want to eat amazing food, see ruins, and stay somewhere walkable. Budget is $3000.",
-        "I'm going to New York today for the day. I have a budget of $500. I want to eat great steak and see a Broadway show."
+        "I'm thinking of going to Rome for a week in late Summer. I want to eat amazing food, see ruins, and stay somewhere walkable, maybe near the Colosseum. Budget is $3000.",
+        "I'm going to New York today for the day. I have a budget of $500. I want to eat great steak and see a Broadway show. Can I stay by the Empire State Building?"
     ]
 
     for query in queries:
