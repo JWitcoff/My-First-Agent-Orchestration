@@ -6,18 +6,19 @@ An intelligent travel planning assistant that generates complete trip itinerarie
 
 - **Complete Travel Plans**: Destination, dates, budget, and personalized activities
 - **Real Flight Data**: Live flight search via Amadeus API with actual prices and airlines  
-- **Smart Hotel Search**: Landmark-based hotel finder using Google Places API
+- **Hybrid Hotel Search**: Combines Google Places (location precision) + Booking.com (pricing) for accurate landmark-based hotel finder
 - **Fuzzy Date Parsing**: Understands "late June", "next summer", "winter", etc.
 - **Graceful Defaults**: Makes reasonable assumptions for missing information
+- **Robust Fallbacks**: Multiple API strategies ensure reliable results even when individual services fail
 
 ## 🏗️ Architecture
 
 Multi-agent system with specialized AI agents:
 - **Travel Agent**: Main orchestrator that plans the overall trip
 - **Flight Agent**: Searches real flights using Amadeus API
-- **Hotel Agent**: Finds hotels near landmarks using Google Places API
+- **Hotel Agent**: Uses hybrid approach - Google Places API for precise location finding + Booking.com API for real pricing and availability
 
-All agents use OpenAI function calling for external API integration and return structured JSON output.
+All agents use OpenAI function calling for external API integration and return structured JSON output. The system includes comprehensive utilities for date parsing, landmark extraction, and IATA code resolution.
 
 ## 🚀 Quick Start (Local)
 
@@ -93,25 +94,49 @@ Try these examples:
 
 - **Backend**: Python, Flask (development server for easy deployment)
 - **AI**: OpenAI GPT-4 with function calling
-- **APIs**: Amadeus (flights), Google Places (hotels), Booking.com (pricing)
+- **APIs**: Amadeus (flights), Google Places (location precision), Booking.com (hotel pricing)
 - **Validation**: Pydantic for structured outputs
+- **Utilities**: Custom date parsing, landmark extraction, IATA code resolution
 - **Deployment**: Render, Railway, or local (optimized for free hosting tiers)
 
 ## 🔧 Architecture Details
 
 ```
+├── README.md
 ├── app/
+│   ├── __init__.py
 │   ├── agents/
-│   │   ├── travel_agent.py    # Main orchestrator
-│   │   └── tools/
-│   │       ├── flight_search.py
-│   │       └── hotel_search.py
+│   │   ├── __init__.py
+│   │   ├── travel_agent.py           # Main orchestrator & agent logic
+│   │   ├── tools/                    # External API integrations
+│   │   │   ├── __init__.py
+│   │   │   ├── booking_hotel_search.py   # Booking.com API wrapper
+│   │   │   ├── flight_search.py          # Amadeus flight search
+│   │   │   ├── google_hotel_searcher.py  # Google Places API
+│   │   │   └── hotel_search.py           # Hybrid hotel search logic
+│   │   └── utils/                    # Helper utilities
+│   │       ├── __init__.py
+│   │       ├── dates.py              # Fuzzy date parsing
+│   │       ├── iata.py               # Airport code resolution
+│   │       ├── nlp.py                # Landmark extraction
+│   │       └── openai_helpers.py     # LLM utilities
+│   ├── config.py                     # Configuration & API clients
 │   ├── routes/
-│   │   └── api.py            # Flask API endpoints
+│   │   ├── __init__.py
+│   │   └── api.py                    # Flask API endpoints
 │   └── templates/
-│       └── index.html        # Web interface
-├── run_flask.py              # App launcher
-└── requirements.txt
+│       └── index.html                # Web interface
+├── debug/                            # Development & testing scripts
+│   ├── debug_booking_hotel.py
+│   ├── debug_dates.py
+│   ├── debug_flights.py
+│   ├── debug_google_hotel.py
+│   ├── debug_hotel_agent.py
+│   └── debug_hotel_tool.py
+├── procfile                          # Deployment configuration
+├── requirements.txt                  # Python dependencies
+├── run.py                           # CLI testing script
+└── run_flask.py                     # Flask app launcher
 ```
 
 ## 📄 License
