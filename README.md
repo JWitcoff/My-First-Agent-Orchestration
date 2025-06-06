@@ -2,6 +2,8 @@
 
 An intelligent travel planning assistant that generates complete trip itineraries from natural language requests. Tell it "I want to go to Tokyo for 5 days in late June with a $5,000 budget" and get flights, hotels, and activities.
 
+Demo on Youtube: https://www.youtube.com/watch?v=aXc1gwydxy4
+
 ## 🎯 What It Does
 
 - **Complete Travel Plans**: Destination, dates, budget, and personalized activities
